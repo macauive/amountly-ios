@@ -15,6 +15,19 @@ class ContactsViewModel: ObservableObject {
     @Published var contacts: [Contact] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published var searchText = ""
+
+    var filteredContacts: [Contact] {
+        let normalized = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return contacts }
+
+        return contacts.filter { contact in
+            contact.name.localizedCaseInsensitiveContains(normalized) ||
+            (contact.contactName?.localizedCaseInsensitiveContains(normalized) ?? false) ||
+            (contact.email?.localizedCaseInsensitiveContains(normalized) ?? false) ||
+            (contact.phone?.localizedCaseInsensitiveContains(normalized) ?? false)
+        }
+    }
 
     private let clientRepository = ClientRepository()
 
@@ -25,7 +38,7 @@ class ContactsViewModel: ObservableObject {
         errorMessage = nil
 
         do {
-            contacts = try await clientRepository.fetchClients()
+            contacts = try await clientRepository.fetchClients(activeOnly: false)
         } catch {
             errorMessage = "Failed to load contacts: \(error.localizedDescription)"
             contacts = []
@@ -58,11 +71,24 @@ struct ContactsListView: View {
                     if viewModel.isLoading {
                         ProgressView()
                             .padding(.top, 40)
+                    } else if let error = viewModel.errorMessage {
+                        errorState(error)
                     } else if viewModel.contacts.isEmpty {
                         emptyState
+                    } else if viewModel.filteredContacts.isEmpty {
+                        ContentUnavailableView.search(text: viewModel.searchText)
                     } else {
+                        HStack {
+                            Label("All Clients (\(viewModel.contacts.count))", systemImage: "person.2.fill")
+                                .font(.alphaHeadlineSmall)
+                                .foregroundColor(.alphaPrimaryText)
+
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+
                         LazyVStack(spacing: 12) {
-                            ForEach(viewModel.contacts) { contact in
+                            ForEach(viewModel.filteredContacts) { contact in
                                 ContactRow(contact: contact)
                                     .onTapGesture {
                                         selectedContact = contact
@@ -84,8 +110,9 @@ struct ContactsListView: View {
                 .padding(.vertical)
             }
             .background(Color.alphaGroupedBackground)
-            .navigationTitle("Contacts")
+            .navigationTitle("Clients")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $viewModel.searchText, prompt: "Search clients")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: { showingAddContact = true }) {
@@ -109,7 +136,14 @@ struct ContactsListView: View {
                 .withAppTheme()
             }
             .sheet(item: $selectedContact) { contact in
-                ContactFormSheet(isPresented: .constant(true), contact: contact, onSave: {
+                ContactFormSheet(isPresented: Binding(
+                    get: { selectedContact != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            selectedContact = nil
+                        }
+                    }
+                ), contact: contact, onSave: {
                     Task {
                         await viewModel.loadContacts()
                         selectedContact = nil
@@ -133,6 +167,34 @@ struct ContactsListView: View {
             Text("Tap + to add your first contact")
                 .font(.alphaBodySmall)
                 .foregroundColor(.alphaTertiaryText)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+
+    private func errorState(_ error: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "person.2.slash")
+                .font(.system(size: 48))
+                .foregroundColor(.alphaError.opacity(0.8))
+
+            Text("Error loading clients")
+                .font(.alphaBody)
+                .fontWeight(.semibold)
+                .foregroundColor(.alphaPrimaryText)
+
+            Text(error)
+                .font(.alphaBodySmall)
+                .foregroundColor(.alphaSecondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            Button("Try Again") {
+                Task {
+                    await viewModel.loadContacts()
+                }
+            }
+            .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 48)
@@ -170,6 +232,15 @@ struct ContactRow: View {
                 }
 
                 Spacer()
+
+                Text(contact.isActive ? "Active" : "Inactive")
+                    .font(.alphaCaption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(contact.isActive ? .alphaSuccess : .alphaSecondaryText)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background((contact.isActive ? Color.alphaSuccess : Color.alphaSecondaryText).opacity(0.12))
+                    .cornerRadius(8)
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12))

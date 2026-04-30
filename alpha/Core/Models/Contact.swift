@@ -22,8 +22,8 @@ struct Contact: Codable, Identifiable, Hashable {
     var contactName: String?
     var notes: String?
     var isActive: Bool
-    let createdAt: Date
-    let updatedAt: Date
+    let createdAt: Date?
+    let updatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -42,6 +42,63 @@ struct Contact: Codable, Identifiable, Hashable {
         case isActive = "is_active"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+
+    init(
+        id: String,
+        organizationId: String?,
+        userId: String?,
+        name: String,
+        email: String?,
+        phone: String?,
+        address: String?,
+        city: String?,
+        state: String?,
+        zipCode: String?,
+        country: String?,
+        contactName: String?,
+        notes: String?,
+        isActive: Bool,
+        createdAt: Date?,
+        updatedAt: Date?
+    ) {
+        self.id = id
+        self.organizationId = organizationId
+        self.userId = userId
+        self.name = name
+        self.email = email
+        self.phone = phone
+        self.address = address
+        self.city = city
+        self.state = state
+        self.zipCode = zipCode
+        self.country = country
+        self.contactName = contactName
+        self.notes = notes
+        self.isActive = isActive
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        organizationId = try container.decodeIfPresent(String.self, forKey: .organizationId)
+        userId = try container.decodeIfPresent(String.self, forKey: .userId)
+        name = try container.decode(String.self, forKey: .name)
+        email = try container.decodeIfPresent(String.self, forKey: .email)
+        phone = try container.decodeIfPresent(String.self, forKey: .phone)
+        address = try container.decodeIfPresent(String.self, forKey: .address)
+        city = try container.decodeIfPresent(String.self, forKey: .city)
+        state = try container.decodeIfPresent(String.self, forKey: .state)
+        zipCode = try container.decodeIfPresent(String.self, forKey: .zipCode)
+        country = try container.decodeIfPresent(String.self, forKey: .country)
+        contactName = try container.decodeIfPresent(String.self, forKey: .contactName)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
+        createdAt = Self.decodeDateIfPresent(from: container, forKey: .createdAt)
+        updatedAt = Self.decodeDateIfPresent(from: container, forKey: .updatedAt)
     }
 
     var displayName: String {
@@ -65,6 +122,27 @@ struct Contact: Codable, Identifiable, Hashable {
         }
 
         return components.joined(separator: ", ")
+    }
+
+    private static func decodeDateIfPresent(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> Date? {
+        if let date = try? container.decodeIfPresent(Date.self, forKey: key) {
+            return date
+        }
+
+        guard let value = try? container.decodeIfPresent(String.self, forKey: key) else {
+            return nil
+        }
+
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: value) {
+            return date
+        }
+
+        return ISO8601DateFormatter().date(from: value)
     }
 }
 
