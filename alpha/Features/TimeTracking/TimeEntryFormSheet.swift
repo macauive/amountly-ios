@@ -21,6 +21,8 @@ class TimeEntryFormViewModel: ObservableObject {
     @Published var notes: String = ""
     @Published var billableRateOverride: String = ""
     @Published var useBillableRateOverride = false
+    @Published var smartTimeText = ""
+    @Published var smartTimeSummary: String?
 
     // Data
     @Published var projects: [Project] = []
@@ -156,6 +158,19 @@ class TimeEntryFormViewModel: ObservableObject {
         }
     }
 
+    func fillFromSmartTime() {
+        let result = TimeCaptureParser.capture(from: smartTimeText)
+        date = result.date
+        startTime = result.startTime
+        endTime = result.endTime
+
+        if notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            notes = result.notes
+        }
+
+        smartTimeSummary = result.reason
+    }
+
     func save() async -> Bool {
         guard canSave else { return false }
         guard let project = selectedProject else { return false }
@@ -242,6 +257,56 @@ struct TimeEntryFormSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                if !viewModel.isEditing {
+                    Section {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: "wand.and.stars")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundColor(.alphaPrimary)
+                                    .frame(width: 32, height: 32)
+                                    .background(Color.alphaPrimary.opacity(0.1))
+                                    .cornerRadius(8)
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("Smart time capture")
+                                        .font(.alphaBodyMedium)
+                                        .foregroundColor(.alphaPrimaryText)
+
+                                    Text("Describe the work and Alpha will fill the time entry.")
+                                        .font(.alphaBodySmall)
+                                        .foregroundColor(.alphaSecondaryText)
+                                }
+                            }
+
+                            TextEditor(text: $viewModel.smartTimeText)
+                                .frame(minHeight: 96)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.alphaBorder.opacity(0.5), lineWidth: 1)
+                                )
+                                .disabled(viewModel.isSaving)
+                                .accessibilityLabel("Smart time text")
+
+                            HStack(alignment: .top, spacing: 12) {
+                                Text(viewModel.smartTimeSummary ?? "Alpha looks for work notes, dates, durations, and time ranges.")
+                                    .font(.alphaCaption)
+                                    .foregroundColor(.alphaSecondaryText)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                Button {
+                                    viewModel.fillFromSmartTime()
+                                } label: {
+                                    Label("Fill time entry", systemImage: "wand.and.stars")
+                                }
+                                .font(.alphaCaption)
+                                .disabled(viewModel.smartTimeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isSaving)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
                 // Project Selection
                 Section {
                     Picker("Project", selection: Binding(
@@ -431,6 +496,189 @@ struct TimeEntryFormSheet: View {
                 await viewModel.loadProjects()
             }
         }
+    }
+}
+
+struct TimeCaptureResult {
+    let date: Date
+    let startTime: Date
+    let endTime: Date
+    let notes: String
+    let durationMinutes: Int
+    let reason: String
+}
+
+enum TimeCaptureParser {
+    nonisolated static func capture(from text: String, referenceDate: Date = Date()) -> TimeCaptureResult {
+        let calendar = Calendar.current
+        let baseDate = parseDate(from: text, referenceDate: referenceDate, calendar: calendar)
+        let range = parseTimeRange(from: text)
+        let durationMinutes = range.map { $0.end - $0.start } ?? parseDurationMinutes(from: text)
+        let startMinutes = range?.start ?? 9 * 60
+        let endMinutes = range?.end ?? startMinutes + durationMinutes
+        let notes = titleCaseFirst(cleanNotes(from: text).nilIfEmpty ?? "Work session")
+
+        return TimeCaptureResult(
+            date: baseDate,
+            startTime: date(on: baseDate, minutesFromMidnight: startMinutes, calendar: calendar),
+            endTime: date(on: baseDate, minutesFromMidnight: endMinutes, calendar: calendar),
+            notes: notes,
+            durationMinutes: durationMinutes,
+            reason: range == nil
+                ? "Alpha found a duration and estimated the time block."
+                : "Alpha found a start and end time in your note."
+        )
+    }
+
+    nonisolated private static func parseDate(from text: String, referenceDate: Date, calendar: Calendar) -> Date {
+        let normalized = text.lowercased()
+        if normalized.contains("yesterday"),
+           let yesterday = calendar.date(byAdding: .day, value: -1, to: referenceDate) {
+            return yesterday
+        }
+
+        if normalized.contains("today") {
+            return referenceDate
+        }
+
+        if let components = firstDateComponents(
+            in: text,
+            pattern: #"\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b"#,
+            order: [.year, .month, .day]
+        ) {
+            return calendar.date(from: components) ?? referenceDate
+        }
+
+        if let components = firstDateComponents(
+            in: text,
+            pattern: #"\b(0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])[-/](20\d{2})\b"#,
+            order: [.month, .day, .year]
+        ) {
+            return calendar.date(from: components) ?? referenceDate
+        }
+
+        return referenceDate
+    }
+
+    nonisolated private static func parseTimeRange(from text: String) -> (start: Int, end: Int)? {
+        let pattern = #"\b(?:from\s*)?([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?\s*(?:-|to)\s*([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?\b"#
+        guard let groups = firstGroups(in: text, pattern: pattern, options: [.caseInsensitive]), groups.count >= 7 else {
+            return nil
+        }
+
+        let start = parseTime(hour: groups[1], minute: groups[2], meridiem: groups[3])
+        let end = parseTime(hour: groups[4], minute: groups[5], meridiem: groups[6].nilIfEmpty ?? groups[3])
+
+        guard let start, let end, end > start else { return nil }
+        return (start, end)
+    }
+
+    nonisolated private static func parseDurationMinutes(from text: String) -> Int {
+        if let groups = firstGroups(in: text, pattern: #"\b(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b"#, options: [.caseInsensitive]),
+           let value = Double(groups[1]) {
+            return Int((value * 60).rounded())
+        }
+
+        if let groups = firstGroups(in: text, pattern: #"\b(\d+)\s*(?:minutes?|mins?|m)\b"#, options: [.caseInsensitive]),
+           let value = Int(groups[1]) {
+            return value
+        }
+
+        return 60
+    }
+
+    nonisolated private static func cleanNotes(from text: String) -> String {
+        text
+            .replacingOccurrences(
+                of: #"\b(?:from\s*)?([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?\s*(?:-|to)\s*([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?\b"#,
+                with: " ",
+                options: [.regularExpression, .caseInsensitive]
+            )
+            .replacingOccurrences(
+                of: #"\b\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m)\b"#,
+                with: " ",
+                options: [.regularExpression, .caseInsensitive]
+            )
+            .replacingOccurrences(of: #"\b(today|yesterday)\b"#, with: " ", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\b(0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])[-/](20\d{2})\b"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func parseTime(hour: String, minute: String, meridiem: String) -> Int? {
+        guard var hours = Int(hour) else { return nil }
+        let minutes = Int(minute.nilIfEmpty ?? "0") ?? 0
+        let normalizedMeridiem = meridiem.lowercased()
+
+        if normalizedMeridiem == "pm", hours < 12 {
+            hours += 12
+        }
+        if normalizedMeridiem == "am", hours == 12 {
+            hours = 0
+        }
+
+        return hours * 60 + minutes
+    }
+
+    nonisolated private static func date(on day: Date, minutesFromMidnight: Int, calendar: Calendar) -> Date {
+        let hour = minutesFromMidnight / 60
+        let minute = minutesFromMidnight % 60
+        var components = calendar.dateComponents([.year, .month, .day], from: day)
+        components.hour = hour
+        components.minute = minute
+        return calendar.date(from: components) ?? day
+    }
+
+    nonisolated private static func titleCaseFirst(_ value: String) -> String {
+        guard let first = value.first else { return value }
+        return first.uppercased() + value.dropFirst()
+    }
+
+    nonisolated private static func firstDateComponents(
+        in text: String,
+        pattern: String,
+        order: [Calendar.Component]
+    ) -> DateComponents? {
+        guard let groups = firstGroups(in: text, pattern: pattern), groups.count == 4 else { return nil }
+
+        var components = DateComponents()
+        for (index, component) in order.enumerated() {
+            let value = Int(groups[index + 1])
+            switch component {
+            case .year:
+                components.year = value
+            case .month:
+                components.month = value
+            case .day:
+                components.day = value
+            default:
+                break
+            }
+        }
+
+        return components
+    }
+
+    nonisolated private static func firstGroups(
+        in text: String,
+        pattern: String,
+        options: NSRegularExpression.Options = []
+    ) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
+
+        return (0..<match.numberOfRanges).map { index in
+            guard let groupRange = Range(match.range(at: index), in: text) else { return "" }
+            return String(text[groupRange])
+        }
+    }
+}
+
+private extension String {
+    nonisolated var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

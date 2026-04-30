@@ -18,6 +18,8 @@ class QuickEntryViewModel: ObservableObject {
     @Published var durationHours: Int = 1
     @Published var durationMinutes: Int = 0
     @Published var notes: String = ""
+    @Published var smartTimeText = ""
+    @Published var smartTimeSummary: String?
     @Published var isLoading = false
     @Published var isSaving = false
     @Published var errorMessage: String?
@@ -78,6 +80,21 @@ class QuickEntryViewModel: ObservableObject {
         }
     }
 
+    func fillFromSmartTime() {
+        let result = TimeCaptureParser.capture(from: smartTimeText)
+        let roundedMinutes = nearestQuarterHour(result.durationMinutes)
+
+        date = result.date
+        durationHours = min(12, roundedMinutes / 60)
+        durationMinutes = roundedMinutes % 60
+
+        if notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            notes = result.notes
+        }
+
+        smartTimeSummary = result.reason
+    }
+
     func saveEntry() async -> Bool {
         guard canSave else { return false }
 
@@ -129,6 +146,13 @@ class QuickEntryViewModel: ObservableObject {
         durationHours = 1
         durationMinutes = 0
         notes = ""
+        smartTimeText = ""
+        smartTimeSummary = nil
         errorMessage = nil
+    }
+
+    private func nearestQuarterHour(_ minutes: Int) -> Int {
+        let rounded = Int((Double(minutes) / 15.0).rounded()) * 15
+        return min(max(15, rounded), 12 * 60)
     }
 }
