@@ -301,7 +301,7 @@ struct TasksView: View {
                 .padding(.vertical)
             }
             .background(Color.alphaGroupedBackground)
-            .navigationTitle("Tasks")
+            .navigationTitle("Time Entries")
             .navigationBarTitleDisplayMode(.inline)
             .refreshable {
                 await viewModel.loadTimeEntries()
@@ -341,7 +341,7 @@ struct TasksView: View {
                 .font(.alphaBody)
                 .foregroundColor(.alphaSecondaryText)
 
-            Text("Tap the + button to log time")
+            Text("Tap + to create your first time entry")
                 .font(.alphaBodySmall)
                 .foregroundColor(.alphaTertiaryText)
         }
