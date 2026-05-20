@@ -7,7 +7,7 @@
 
 import Foundation
 
-/// Defines all possible features and actions in the Alpha app
+/// Defines all possible features and actions in the Amountly app
 /// Used to control access based on account type and user role
 enum Capability: String, CaseIterable {
     // MARK: - Time & Attendance

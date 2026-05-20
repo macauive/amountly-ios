@@ -387,7 +387,7 @@ private struct DashboardNextStepsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Alpha Next Steps")
+            Text("Amountly Next Steps")
                 .font(.alphaHeadline)
                 .foregroundColor(.alphaPrimaryText)
 
@@ -823,7 +823,7 @@ struct EmptyStateView: View {
                     .font(.system(size: 64))
                     .foregroundColor(.alphaSecondaryText.opacity(0.5))
 
-                Text("Welcome to Alpha!")
+                Text("Welcome to Amountly!")
                     .font(.alphaTitle)
                     .foregroundColor(.alphaPrimaryText)
 
@@ -894,7 +894,7 @@ struct EmptyStateView: View {
         case .business:
             return "Start managing your team's time and projects. Create invoices and track revenue."
         case .none:
-            return "Get started with Alpha!"
+            return "Get started with Amountly!"
         }
     }
 }

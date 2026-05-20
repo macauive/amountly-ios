@@ -84,7 +84,7 @@ struct DisplaySettingsView: View {
             } header: {
                 Text("")
             } footer: {
-                Text("Choose how Alpha looks on your device. System will match your device's appearance settings.")
+                Text("Choose how Amountly looks on your device. System will match your device's appearance settings.")
                     .font(.alphaCaption)
                     .foregroundColor(.alphaSecondaryText)
             }

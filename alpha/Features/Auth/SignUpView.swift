@@ -210,7 +210,6 @@ struct SignUpView: View {
                     }
                     .padding(.horizontal, 24)
 
-                    // Sign In Link
                     HStack(spacing: 4) {
                         Text("Already have an account?")
                             .font(.alphaBodySmall)
@@ -219,7 +218,7 @@ struct SignUpView: View {
                         Button(action: {
                             dismiss()
                         }) {
-                            Text("Sign In")
+                            Text("Log In")
                                 .font(.alphaBodySmall)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.alphaInfo)

@@ -535,7 +535,7 @@ struct ExpenseFormSheet: View {
                                         .font(.alphaBodyMedium)
                                         .foregroundColor(.alphaPrimaryText)
 
-                                    Text("Paste a receipt line or describe the expense and Alpha will fill what it can.")
+                                    Text("Paste a receipt line or describe the expense and Amountly will fill what it can.")
                                         .font(.alphaBodySmall)
                                         .foregroundColor(.alphaSecondaryText)
                                 }
@@ -550,7 +550,7 @@ struct ExpenseFormSheet: View {
                                 .accessibilityLabel("Smart expense text")
 
                             HStack(alignment: .top, spacing: 12) {
-                                Text(smartCaptureSummary ?? "Alpha looks for amount, merchant, date, and category signals.")
+                                Text(smartCaptureSummary ?? "Amountly looks for amount, merchant, date, and category signals.")
                                     .font(.alphaCaption)
                                     .foregroundColor(.alphaSecondaryText)
                                     .frame(maxWidth: .infinity, alignment: .leading)

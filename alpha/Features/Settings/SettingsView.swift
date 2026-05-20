@@ -343,14 +343,14 @@ private struct DataExportSettingsView: View {
 
     private var exportItems: [DataExportItem] {
         [
-            DataExportItem(kind: .invoices, label: "Invoices", filename: "alpha-invoices.csv", capability: .viewInvoices),
-            DataExportItem(kind: .invoiceLineItems, label: "Invoice Line Items", filename: "alpha-invoice-lines.csv", capability: .viewInvoices),
-            DataExportItem(kind: .expenses, label: "Expenses", filename: "alpha-expenses.csv", capability: .viewOwnExpenses),
-            DataExportItem(kind: .bills, label: "Bills", filename: "alpha-bills.csv", capability: .viewBills),
-            DataExportItem(kind: .clients, label: "Clients", filename: "alpha-clients.csv", capability: .viewClients),
-            DataExportItem(kind: .projects, label: "Projects", filename: "alpha-projects.csv", capability: .viewProjects),
-            DataExportItem(kind: .timeEntries, label: "Time Entries", filename: "alpha-time-entries.csv", capability: .viewOwnTimeEntries),
-            DataExportItem(kind: .taxFilings, label: "Tax Filings", filename: "alpha-tax-filings.csv", capability: .viewTaxDashboard)
+            DataExportItem(kind: .invoices, label: "Invoices", filename: "amountly-invoices.csv", capability: .viewInvoices),
+            DataExportItem(kind: .invoiceLineItems, label: "Invoice Line Items", filename: "amountly-invoice-lines.csv", capability: .viewInvoices),
+            DataExportItem(kind: .expenses, label: "Expenses", filename: "amountly-expenses.csv", capability: .viewOwnExpenses),
+            DataExportItem(kind: .bills, label: "Bills", filename: "amountly-bills.csv", capability: .viewBills),
+            DataExportItem(kind: .clients, label: "Clients", filename: "amountly-clients.csv", capability: .viewClients),
+            DataExportItem(kind: .projects, label: "Projects", filename: "amountly-projects.csv", capability: .viewProjects),
+            DataExportItem(kind: .timeEntries, label: "Time Entries", filename: "amountly-time-entries.csv", capability: .viewOwnTimeEntries),
+            DataExportItem(kind: .taxFilings, label: "Tax Filings", filename: "amountly-tax-filings.csv", capability: .viewTaxDashboard)
         ].filter { appState.hasCapability($0.capability) }
     }
 

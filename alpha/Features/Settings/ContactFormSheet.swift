@@ -67,7 +67,7 @@ struct ContactFormSheet: View {
                                         .font(.alphaBodyMedium)
                                         .foregroundColor(.alphaPrimaryText)
 
-                                    Text("Paste a client signature or contact block and Alpha will fill what it can.")
+                                    Text("Paste a client signature or contact block and Amountly will fill what it can.")
                                         .font(.alphaBodySmall)
                                         .foregroundColor(.alphaSecondaryText)
                                 }
@@ -82,7 +82,7 @@ struct ContactFormSheet: View {
                                 .accessibilityLabel("Smart contact text")
 
                             HStack(alignment: .top, spacing: 12) {
-                                Text(smartContactSummary ?? "Alpha looks for company, contact, email, phone, and address.")
+                                Text(smartContactSummary ?? "Amountly looks for company, contact, email, phone, and address.")
                                     .font(.alphaCaption)
                                     .foregroundColor(.alphaSecondaryText)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -298,7 +298,7 @@ private enum ContactCaptureParser {
             state: value(in: cityStateZip, at: 2),
             zipCode: value(in: cityStateZip, at: 3),
             notes: text.trimmingCharacters(in: .whitespacesAndNewlines),
-            reason: "Alpha looked for company, contact, email, phone, and address details."
+            reason: "Amountly looked for company, contact, email, phone, and address details."
         )
     }
 

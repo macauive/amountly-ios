@@ -111,18 +111,18 @@ struct LoginView: View {
 
             ScrollView {
                 VStack(spacing: 32) {
-                    // Logo / Header
                     VStack(spacing: 12) {
-                        Image(systemName: "timer.circle.fill")
+                        Image("AmountlyLogo")
                             .resizable()
+                            .scaledToFit()
                             .frame(width: 80, height: 80)
-                            .foregroundColor(Color(uiColor: .label))
+                            .accessibilityHidden(true)
 
-                        Text("Alpha")
+                        Text("Amountly")
                             .font(.alphaDisplayLarge)
                             .foregroundColor(.alphaPrimaryText)
 
-                        Text("Contractor Time Tracking")
+                        Text("Simple accounting workspace")
                             .font(.alphaBody)
                             .foregroundColor(.alphaSecondaryText)
                     }
@@ -189,9 +189,8 @@ struct LoginView: View {
                             .cornerRadius(8)
                         }
 
-                        // Login Button
                         AlphaButton(
-                            "Sign In",
+                            "Log In",
                             style: .primary,
                             size: .large,
                             isLoading: viewModel.isLoading,

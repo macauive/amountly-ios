@@ -190,7 +190,7 @@ struct EmailVerificationView: View {
                                     .font(.alphaTitle)
                                     .foregroundColor(.alphaPrimaryText)
 
-                                Text("Your email has been successfully verified. Please sign in with your password to continue.")
+                                Text("Your email has been successfully verified. Please log in with your password to continue.")
                                     .font(.alphaBody)
                                     .foregroundColor(.alphaSecondaryText)
                                     .multilineTextAlignment(.center)
@@ -199,7 +199,7 @@ struct EmailVerificationView: View {
 
                             // Continue Button
                             AlphaButton(
-                                "Continue to Sign In",
+                                "Continue to Log In",
                                 style: .primary,
                                 size: .large,
                                 isLoading: viewModel.isLoading,

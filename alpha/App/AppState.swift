@@ -136,7 +136,7 @@ class AppState: ObservableObject {
         organization = nil
         isAuthenticated = false
         isLoading = false
-        self.error = "We couldn’t restore your session. Please sign in again."
+        self.error = "We couldn’t restore your session. Please log in again."
     }
 
     private func cancelRestoreTask() {

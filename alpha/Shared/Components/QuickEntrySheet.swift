@@ -30,7 +30,7 @@ struct QuickEntrySheet: View {
                                     .font(.alphaBodyMedium)
                                     .foregroundColor(.alphaPrimaryText)
 
-                                Text("Describe the work and Alpha will fill the time entry.")
+                                Text("Describe the work and Amountly will fill the time entry.")
                                     .font(.alphaBodySmall)
                                     .foregroundColor(.alphaSecondaryText)
                             }
@@ -46,7 +46,7 @@ struct QuickEntrySheet: View {
                             .accessibilityLabel("Smart time text")
 
                         HStack(alignment: .top, spacing: 12) {
-                            Text(viewModel.smartTimeSummary ?? "Alpha looks for work notes, dates, durations, and time ranges.")
+                            Text(viewModel.smartTimeSummary ?? "Amountly looks for work notes, dates, durations, and time ranges.")
                                 .font(.alphaCaption)
                                 .foregroundColor(.alphaSecondaryText)
                                 .frame(maxWidth: .infinity, alignment: .leading)
