@@ -1,82 +1,16 @@
-//
-//  PaymentRepository.swift
-//  alpha
-//
-//  Created by Claude Code on 2/1/26.
-//
-
 import Foundation
 import Supabase
 
-class PaymentRepository {
-    private let supabase = SupabaseClientManager.shared.client
-
-    func createPayment(
-        amount: Double,
-        paymentMethod: String,
-        reference: String,
-        paymentDate: Date
-    ) async throws -> Payment {
-        let insert = PaymentInsert(
-            amount: amount,
-            paymentMethod: paymentMethod,
-            reference: reference,
-            paymentDate: paymentDate.iso8601String
-        )
-
-        let response = try await supabase
-            .from("payments")
-            .insert(insert)
-            .select()
-            .single()
-            .execute()
-
-        let payment: Payment = try JSONDecoder().decode(Payment.self, from: response.data)
-        return payment
+final class PaymentRepository {
+    func record(invoice: Invoice, amount: Double, method: String, reference: String, date: Date, attempt: RecordAttempt) async throws {
+        guard [.sent, .overdue].contains(invoice.status), amount.isFinite, amount > 0,
+              amount <= invoice.balanceDue, RecordCoding.money(amount) == amount,
+              ["bank_transfer", "card", "cash", "check", "other"].contains(method), reference.count <= 500,
+              RecordCoding.day(date) <= RecordCoding.day(Date()) else { throw RecordError.invalid }
+        try await attempt.perform("record_invoice_payment", params: ["p_id": .string(attempt.id), "p_invoice_id": .string(invoice.id), "p_amount": .double(amount), "p_paid_on": .string(RecordCoding.day(date)), "p_method": .string(method), "p_reference": .string(reference)])
     }
-
-    func fetchPayments() async throws -> [Payment] {
-        let response = try await supabase
-            .from("payments")
-            .select("*")
-            .order("payment_date", ascending: false)
-            .execute()
-
-        let payments: [Payment] = try JSONDecoder().decode([Payment].self, from: response.data)
-        return payments
-    }
-}
-
-// MARK: - Payment Model (if not already defined elsewhere)
-
-struct Payment: Codable, Identifiable {
-    let id: String
-    let amount: Double
-    let paymentMethod: String
-    let reference: String?
-    let paymentDate: Date
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case amount
-        case paymentMethod = "payment_method"
-        case reference
-        case paymentDate = "payment_date"
-    }
-}
-
-// MARK: - Insert DTO
-
-struct PaymentInsert: Codable {
-    let amount: Double
-    let paymentMethod: String
-    let reference: String
-    let paymentDate: String
-
-    enum CodingKeys: String, CodingKey {
-        case amount
-        case paymentMethod = "payment_method"
-        case reference
-        case paymentDate = "payment_date"
+    func reverse(payment: InvoicePayment, reason: String, attempt: RecordAttempt) async throws {
+        guard !payment.isReversed, (5...500).contains(reason.trimmingCharacters(in: .whitespacesAndNewlines).count) else { throw RecordError.invalid }
+        try await attempt.perform("reverse_invoice_payment", params: ["p_id": .string(attempt.id), "p_payment_id": .string(payment.id), "p_reason": .string(reason)])
     }
 }

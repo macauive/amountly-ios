@@ -22,15 +22,24 @@ class AppState: ObservableObject {
     private var authStateTask: Task<Void, Never>?
     private var restoreTask: Task<Void, Never>?
     private var restoreGeneration = UUID()
+    private var signingIn = false
+
+    func beginSignIn() { signingIn = true; cancelRestoreTask() }
+    func endSignIn() { signingIn = false }
 
     // MARK: - Initialization
 
     init() {
+#if DEBUG
+        // Hosted XCTest owns its sessions; background UI restoration would race it.
+        if ProcessInfo.processInfo.environment["AMOUNTLY_XCTEST"] == "1" { return }
+#endif
         // Observe auth state changes
         authStateTask = authService.observeAuthStateChanges { [weak self] event, session in
             Task { @MainActor in
                 switch event {
                 case .signedIn, .initialSession:
+                    guard self?.signingIn == false else { return }
                     await self?.restoreAuthenticatedState(trigger: "authState:\(event)")
                 case .signedOut:
                     self?.cancelRestoreTask()
@@ -48,6 +57,9 @@ class AppState: ObservableObject {
     }
 
     func checkAuthStatus() async {
+#if DEBUG
+        if ProcessInfo.processInfo.environment["AMOUNTLY_XCTEST"] == "1" { return }
+#endif
         await restoreAuthenticatedState(trigger: "launch")
     }
 
@@ -94,7 +106,7 @@ class AppState: ObservableObject {
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.performRestore(trigger: trigger)
+            await self.performRestore(trigger: trigger, generation: generation)
         }
 
         restoreTask = task
@@ -105,17 +117,19 @@ class AppState: ObservableObject {
         }
     }
 
-    private func performRestore(trigger: String) async {
+    private func performRestore(trigger: String, generation: UUID) async {
         isLoading = true
         error = nil
 
         do {
             guard let restoredState = try await authService.restoreAuthenticatedState() else {
+                guard restoreGeneration == generation else { return }
                 onSignedOut()
                 isLoading = false
                 return
             }
 
+            guard restoreGeneration == generation else { return }
             currentUser = restoredState.user
             organization = restoredState.organization
             isAuthenticated = true
@@ -125,8 +139,11 @@ class AppState: ObservableObject {
             print("✅ AppState.performRestore(\(trigger)): restored user=\(restoredState.user.id) org=\(restoredOrganizationId)")
         } catch is CancellationError {
             print("ℹ️ AppState.performRestore(\(trigger)): cancelled")
+        } catch let error as URLError where error.code == .cancelled {
+            print("ℹ️ AppState.performRestore(\(trigger)): cancelled URL request")
         } catch {
-            print("❌ AppState.performRestore(\(trigger)): failed: \(error)")
+            guard restoreGeneration == generation else { return }
+            print("Authentication operation failed; retry or sign in again.")
             enterRecoveryState(for: error)
         }
     }

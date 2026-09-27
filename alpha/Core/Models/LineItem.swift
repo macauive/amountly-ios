@@ -14,7 +14,7 @@ struct LineItem: Identifiable, Codable {
     var rate: Double
 
     var total: Double {
-        quantity * rate
+        FinancialRules.cents(quantity * rate)
     }
 
     init(id: UUID = UUID(), description: String = "", quantity: Double = 1.0, rate: Double = 0.0) {

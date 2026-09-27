@@ -101,6 +101,9 @@ struct Expense: Codable, Identifiable {
     let createdAt: Date
     let updatedAt: Date
 
+    var version: String? = nil
+    var receiptPath: String? = nil
+
     // Populated by backend joins
     let project: Project?
     let task: ProjectTask?
@@ -118,6 +121,7 @@ struct Expense: Codable, Identifiable {
         case merchant
         case expenseDate = "expense_date"
         case receiptUrl = "receipt_url"
+        case receiptPath = "receipt_path"
         case status
         case notes
         case invoiceId = "invoice_id"
@@ -137,7 +141,7 @@ struct Expense: Codable, Identifiable {
     }
 
     var hasReceipt: Bool {
-        receiptUrl != nil
+        receiptPath != nil || receiptUrl != nil
     }
 }
 

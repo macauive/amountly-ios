@@ -128,6 +128,18 @@ struct Invoice: Codable, Identifiable {
     let createdAt: Date?
     let updatedAt: Date?
 
+    var version: String? = nil
+    var payments: [InvoicePayment]? = nil
+    var issuedSnapshot: InvoiceSnapshot? = nil
+    var displayClientName: String? { if let client = issuedSnapshot?.client { return client.name }; return client?.name }
+    var displayClientEmail: String? { if let client = issuedSnapshot?.client { return client.email }; return client?.email }
+    var displayClientAddress: String? { if let client = issuedSnapshot?.client { return client.address }; return client?.address }
+    var lastPaymentDate: Date? { (payments ?? []).filter { !$0.isReversed }.map(\.paid_on).max() }
+    var amountPaid: Double { RecordCoding.money((payments ?? []).filter { !$0.isReversed }.reduce(0) { $0 + $1.amount }) }
+    var balanceDue: Double { status == .paid || status == .cancelled ? 0 : max(0, RecordCoding.money(total - amountPaid)) }
+    var displayStatus: InvoiceStatus { [.sent, .overdue].contains(status) ? (isOverdue ? .overdue : .sent) : status }
+    var needsLegacyReview: Bool { status == .paid && (payments ?? []).isEmpty }
+
     // Populated by backend joins
     let client: Client?
     let project: Project?
@@ -152,6 +164,8 @@ struct Invoice: Codable, Identifiable {
         case paidAt = "paid_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case payments
+        case issuedSnapshot = "issued_snapshot"
         case client
         case project
         case lineItems = "line_items"
@@ -166,8 +180,8 @@ struct Invoice: Codable, Identifiable {
     }
 
     var isOverdue: Bool {
-        guard status != .paid && status != .cancelled else { return false }
-        return dueDate < Date()
+        guard [.sent, .overdue].contains(status), balanceDue > 0 else { return false }
+        return dueDate < Calendar.current.startOfDay(for: Date())
     }
 
     var daysUntilDue: Int {

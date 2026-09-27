@@ -41,21 +41,22 @@ enum BillStatus: String, Codable, CaseIterable {
 }
 
 enum BillRecurrence: String, Codable, CaseIterable {
-    case none
-    case weekly
-    case monthly
-    case quarterly
-    case yearly
-
-    var displayName: String {
-        switch self {
-        case .none: return "None"
+    case none = "once", weekly, biweekly, monthly, quarterly, yearly = "annually"
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        let normalized = value == "none" ? "once" : value == "yearly" ? "annually" : value
+        guard let recurrence = BillRecurrence(rawValue: normalized) else { throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported recurrence") }
+        self = recurrence
+    }
+    var displayName: String { switch self {
+        case .none: return "Once"
         case .weekly: return "Weekly"
+        case .biweekly: return "Every two weeks"
         case .monthly: return "Monthly"
         case .quarterly: return "Quarterly"
-        case .yearly: return "Yearly"
-        }
-    }
+        case .yearly: return "Annually"
+    } }
 }
 
 struct Bill: Identifiable, Codable {
@@ -74,6 +75,7 @@ struct Bill: Identifiable, Codable {
     let autoPay: Bool
     let createdAt: Date?
     let updatedAt: Date?
+    var version: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -110,6 +112,7 @@ struct Bill: Identifiable, Codable {
         autoPay = try container.decodeIfPresent(Bool.self, forKey: .autoPay) ?? false
         createdAt = try Self.decodeDate(container, key: .createdAt)
         updatedAt = try Self.decodeDate(container, key: .updatedAt)
+        version = try container.decodeIfPresent(String.self, forKey: .updatedAt)
     }
 
     init(
@@ -153,6 +156,12 @@ struct Bill: Identifiable, Codable {
         return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
     }
 
+    var effectiveStatus: BillStatus {
+        if status == .paid || status == .cancelled { return status }
+        let today = Calendar.current.startOfDay(for: Date())
+        if dueDate < today { return .overdue }
+        return Calendar.current.isDate(dueDate, inSameDayAs: today) ? .due : .upcoming
+    }
     var isPaid: Bool {
         status == .paid
     }
@@ -166,15 +175,8 @@ struct Bill: Identifiable, Codable {
             return nil
         }
 
-        if let date = ISO8601DateFormatter().date(from: value) {
-            return date
-        }
-
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: value)
+        guard let date = RecordCoding.parseDate(value) else { throw RecordError.invalid }
+        return date
     }
 }
 
@@ -218,88 +220,33 @@ struct BillStatusUpdate: Codable {
 
 final class BillRepository {
     private let supabase = SupabaseClientManager.shared.client
-
     func fetchBills() async throws -> [Bill] {
-        guard let userId = supabase.auth.currentSession?.user.id.uuidString else {
-            throw AuthError.notAuthenticated
+        let scope = try await OwnershipResolver().currentScope()
+        var rows: [Bill] = []
+        while true {
+            let data = try await supabase.from("bills").select().eq("user_id", value: scope.userId)
+                .order("due_date").order("id").range(from: rows.count, to: rows.count + 199).execute().data
+            let batch = try RecordCoding.decoder().decode([Bill].self, from: data)
+            rows += batch
+            if batch.count < 200 { return rows }
         }
-
-        let response = try await supabase
-            .from("bills")
-            .select("*")
-            .eq("user_id", value: userId)
-            .order("due_date", ascending: true)
-            .execute()
-
-        return try JSONDecoder().decode([Bill].self, from: response.data)
     }
-
-    func createBill(
-        name: String,
-        payee: String,
-        amount: Double,
-        category: String,
-        dueDate: Date,
-        recurrence: BillRecurrence,
-        notes: String?
-    ) async throws -> Bill {
-        guard let userId = supabase.auth.currentSession?.user.id.uuidString else {
-            throw AuthError.notAuthenticated
-        }
-
-        let insert = BillInsert(
-            userId: userId,
-            name: name,
-            payee: payee,
-            amount: amount,
-            currency: "USD",
-            category: category,
-            dueDate: dueDate.dateOnlyString,
-            status: "upcoming",
-            recurrence: recurrence.rawValue,
-            notes: notes,
-            autoPay: false
-        )
-
-        let response = try await supabase
-            .from("bills")
-            .insert(insert)
-            .select()
-            .single()
-            .execute()
-
-        return try JSONDecoder().decode(Bill.self, from: response.data)
+    func createBill(name: String, payee: String, amount: Double, category: String, dueDate: Date, recurrence: BillRecurrence, notes: String?, currency: String = "USD", autoPay: Bool = false, attempt: RecordAttempt = RecordAttempt()) async throws -> Bill {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !payee.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              amount.isFinite, amount > 0, amount < 100000000, RecordCoding.money(amount) == amount, RecordCoding.currencies.contains(currency) else { throw RecordError.invalid }
+        try await attempt.perform("create_money_record", params: ["p_kind": .string("bills"), "p_id": .string(attempt.id), "p_data": .object([
+            "name": .string(name), "payee": .string(payee), "amount": .double(amount), "currency": .string(currency), "category": .string(category), "due_date": .string(RecordCoding.day(dueDate)), "status": .string("upcoming"), "recurrence": .string(recurrence.rawValue), "auto_pay": .bool(autoPay), "notes": .string(notes ?? "")])])
+        return try await fetchBill(id: attempt.id)
     }
-
-    func markBillPaid(id: String) async throws -> Bill {
-        let update = BillStatusUpdate(status: "paid", paidAt: Date().iso8601String)
-
-        let response = try await supabase
-            .from("bills")
-            .update(update)
-            .eq("id", value: id)
-            .select()
-            .single()
-            .execute()
-
-        return try JSONDecoder().decode(Bill.self, from: response.data)
+    func fetchBill(id: String) async throws -> Bill {
+        let scope = try await OwnershipResolver().currentScope()
+        return try await supabase.from("bills").select().eq("id", value: id).eq("user_id", value: scope.userId).single().execute().value
     }
-
-    func deleteBill(id: String) async throws {
-        try await supabase
-            .from("bills")
-            .delete()
-            .eq("id", value: id)
-            .execute()
-    }
-}
-
-private extension Date {
-    var dateOnlyString: String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: self)
+    func action(_ bill: Bill, action: String, paidOn: Date? = nil) async throws {
+        guard let version = bill.version, ["pay", "cancel"].contains(action) else { throw RecordError.conflict }
+        do {
+            try await supabase.rpc("bill_action", params: ["p_id": AnyJSON.string(bill.id), "p_action": .string(action), "p_expected_updated_at": .string(version), "p_paid_on": paidOn.map { .string(RecordCoding.day($0)) } ?? .null]).execute()
+            NotificationCenter.default.post(name: .recordsChanged, object: nil)
+        } catch { throw RecordError.safe(error) }
     }
 }

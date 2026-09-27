@@ -33,10 +33,12 @@ class LoginViewModel: ObservableObject {
         }
 
         isLoading = true
+        appState.beginSignIn()
+        defer { appState.endSignIn(); isLoading = false }
         errorMessage = nil
 
         do {
-            print("🔐 LoginViewModel: Starting login for \(email)")
+            print("🔐 LoginViewModel: Starting login")
 
             // Step 1: Sign in with password to get authenticated JWT
             try await authService.signInWithPassword(email: email, password: password)
@@ -91,8 +93,8 @@ class LoginViewModel: ObservableObject {
                 }
             }
         } catch {
-            print("❌ LoginViewModel: Login failed with error: \(error)")
-            errorMessage = error.localizedDescription
+            print("Authentication operation failed; retry or sign in again.")
+            errorMessage = (error as? RecordError)?.localizedDescription ?? "Could not sign in. Check your credentials and connection, then try again."
         }
 
         isLoading = false

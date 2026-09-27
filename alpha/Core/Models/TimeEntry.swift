@@ -53,7 +53,7 @@ enum TimeEntrySource: String, Codable {
 struct TimeEntry: Codable, Identifiable {
     let id: String
     let userId: String
-    let projectId: String
+    let projectId: String?
     let taskId: String?
     let startAt: Date
     let endAt: Date
@@ -65,6 +65,10 @@ struct TimeEntry: Codable, Identifiable {
     let invoiceId: String?
     let createdAt: Date
     let updatedAt: Date
+
+    var version: String? = nil
+    var billingLinks: [TimeBillingLink]? = nil
+    var isReserved: Bool { invoiceId != nil || (billingLinks ?? []).contains { $0.released_at == nil } }
 
     // Populated by backend joins
     let project: Project?
@@ -86,6 +90,7 @@ struct TimeEntry: Codable, Identifiable {
         case invoiceId = "invoice_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case billingLinks = "billing_links"
         case project
         case task
         case user
@@ -167,3 +172,5 @@ extension TimeEntry {
         user: .preview
     )
 }
+
+struct TimeBillingLink: Codable { let invoice_id: String; let released_at: String? }

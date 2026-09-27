@@ -7,12 +7,14 @@
 
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
 
 // MARK: - ViewModel
 
 @MainActor
 class ExpenseViewModel: ObservableObject {
     @Published var expenses: [Expense] = []
+    private var currency = "USD"
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var selectedFilter: ExpenseFilter = .all
@@ -57,10 +59,11 @@ class ExpenseViewModel: ObservableObject {
         errorMessage = nil
 
         do {
+            currency = try await AuthService.shared.getCurrentUser().reportingCurrency
             expenses = try await expenseRepository.fetchExpenses()
             calculateSummaries()
         } catch {
-            errorMessage = "Failed to load expenses: \(error.localizedDescription)"
+            errorMessage = "Failed to load expenses: \(RecordError.safe(error).localizedDescription)"
             expenses = []
         }
 
@@ -69,44 +72,44 @@ class ExpenseViewModel: ObservableObject {
 
     func deleteExpense(_ expenseId: String) async {
         do {
-            try await expenseRepository.deleteExpense(id: expenseId)
+            try await expenseRepository.deleteExpense(id: expenseId, expectedVersion: expenses.first { $0.id == expenseId }?.version)
             await loadExpenses()
         } catch {
-            errorMessage = "Failed to delete expense: \(error.localizedDescription)"
+            errorMessage = "Failed to delete expense: \(RecordError.safe(error).localizedDescription)"
         }
     }
 
     func submitExpense(_ expenseId: String) async {
         do {
-            _ = try await expenseRepository.updateStatus(id: expenseId, status: "SUBMITTED")
+            _ = try await expenseRepository.updateStatus(id: expenseId, status: "SUBMITTED", expectedVersion: expenses.first { $0.id == expenseId }?.version)
             await loadExpenses()
         } catch {
-            errorMessage = "Failed to submit expense: \(error.localizedDescription)"
+            errorMessage = "Failed to submit expense: \(RecordError.safe(error).localizedDescription)"
         }
     }
 
     func approveExpense(_ expenseId: String) async {
         do {
-            _ = try await expenseRepository.updateStatus(id: expenseId, status: "APPROVED")
+            _ = try await expenseRepository.updateStatus(id: expenseId, status: "APPROVED", expectedVersion: expenses.first { $0.id == expenseId }?.version)
             await loadExpenses()
         } catch {
-            errorMessage = "Failed to approve expense: \(error.localizedDescription)"
+            errorMessage = "Failed to approve expense: \(RecordError.safe(error).localizedDescription)"
         }
     }
 
     func rejectExpense(_ expenseId: String) async {
         do {
-            _ = try await expenseRepository.updateStatus(id: expenseId, status: "REJECTED")
+            _ = try await expenseRepository.updateStatus(id: expenseId, status: "REJECTED", expectedVersion: expenses.first { $0.id == expenseId }?.version)
             await loadExpenses()
         } catch {
-            errorMessage = "Failed to reject expense: \(error.localizedDescription)"
+            errorMessage = "Failed to reject expense: \(RecordError.safe(error).localizedDescription)"
         }
     }
 
     private func calculateSummaries() {
-        totalExpenses = expenses.reduce(0) { $0 + $1.amount }
+        totalExpenses = FinancialRules.sum(expenses.filter { $0.currency == currency && $0.status != .rejected }.map(\.amount))
         pendingCount = expenses.filter { $0.status == .submitted }.count
-        approvedTotal = expenses.filter { $0.status == .approved }.reduce(0) { $0 + $1.amount }
+        approvedTotal = expenses.filter { $0.status == .approved && $0.currency == currency }.reduce(0) { $0 + $1.amount }
     }
 }
 
@@ -134,7 +137,7 @@ struct ExpenseView: View {
                 HStack(spacing: 12) {
                     ExpenseSummaryCard(
                         title: "Total",
-                        value: String(format: "$%.2f", viewModel.totalExpenses),
+                        value: viewModel.totalExpenses.formatted(.currency(code: appState.currentUser?.reportingCurrency ?? "USD")),
                         icon: "dollarsign.circle",
                         color: .blue
                     )
@@ -148,7 +151,7 @@ struct ExpenseView: View {
 
                     ExpenseSummaryCard(
                         title: "Approved",
-                        value: String(format: "$%.2f", viewModel.approvedTotal),
+                        value: viewModel.approvedTotal.formatted(.currency(code: appState.currentUser?.reportingCurrency ?? "USD")),
                         icon: "checkmark.circle",
                         color: .green
                     )
@@ -191,7 +194,7 @@ struct ExpenseView: View {
                                         Button(role: .destructive) {
                                             Task { await viewModel.deleteExpense(expense.id) }
                                         } label: {
-                                            Label("Delete", systemImage: "trash")
+                                            Label("Archive", systemImage: "trash")
                                         }
 
                                         Button {
@@ -202,7 +205,7 @@ struct ExpenseView: View {
                                         .tint(.blue)
                                     }
 
-                                    if expense.status == .submitted && appState.hasCapability(.approveExpenses) {
+                                    if expense.status == .submitted && expense.userId != appState.currentUser?.id && appState.hasCapability(.approveExpenses) {
                                         Button {
                                             Task { await viewModel.rejectExpense(expense.id) }
                                         } label: {
@@ -243,6 +246,7 @@ struct ExpenseView: View {
             .task {
                 await viewModel.loadExpenses()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .recordsChanged)) { _ in Task { await viewModel.loadExpenses() } }
             .sheet(isPresented: $showingAddExpense) {
                 ExpenseFormSheet(isPresented: $showingAddExpense, onSave: {
                     Task { await viewModel.loadExpenses() }
@@ -449,12 +453,19 @@ struct ExpenseStatusBadge: View {
 // MARK: - Expense Form Sheet
 
 struct ExpenseFormSheet: View {
+    @EnvironmentObject private var appState: AppState
+    @State private var pickingReceipt = false
+    @State private var receiptURL: URL?
+    @State private var uploadedReceipt: String?
+    @State private var captureStarted = false
+    @State private var captureAttempt = RecordAttempt()
     @Binding var isPresented: Bool
     var expense: Expense?
     var onSave: () -> Void
 
     @State private var description = ""
     @State private var amount = ""
+    @State private var currency = "USD"
     @State private var category: ExpenseCategory = .other
     @State private var merchant = ""
     @State private var expenseDate = Date()
@@ -493,6 +504,12 @@ struct ExpenseFormSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                if !isEditing {
+                    Section("Receipt attachment") {
+                        Button(receiptURL == nil ? "Attach Receipt" : "Receipt Selected") { pickingReceipt = true }.disabled(captureStarted)
+                        Text("JPEG, PNG, WebP or PDF · up to 10 MB. Private receipts open with a short-lived link.").font(.caption)
+                    }
+                }
                 // Scan Receipt Button
                 if !isEditing && ReceiptScanner.isAvailable {
                     Section {
@@ -579,7 +596,7 @@ struct ExpenseFormSheet: View {
                         Text("Amount")
                         Spacer()
                         HStack(spacing: 4) {
-                            Text("$")
+                            Text(currency)
                                 .foregroundColor(.secondary)
                             TextField("0.00", text: $amount)
                                 .keyboardType(.decimalPad)
@@ -588,6 +605,7 @@ struct ExpenseFormSheet: View {
                         }
                     }
 
+                    Picker("Currency", selection: $currency) { ForEach(RecordCoding.currencies, id: \.self) { Text($0) } }
                     Picker("Category", selection: $category) {
                         ForEach(ExpenseCategory.allCases, id: \.self) { cat in
                             Label(cat.displayName, systemImage: cat.iconName)
@@ -633,6 +651,7 @@ struct ExpenseFormSheet: View {
                     }
                 }
             }
+            .disabled(captureStarted && !isEditing)
             .navigationTitle(isEditing ? "Edit Expense" : "New Expense")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -656,7 +675,11 @@ struct ExpenseFormSheet: View {
                 }
             }
             .task {
+                currency = expense?.currency ?? appState.currentUser?.reportingCurrency ?? "USD"
                 await loadProjects()
+            }
+            .fileImporter(isPresented: $pickingReceipt, allowedContentTypes: [.jpeg, .png, .webP, .pdf]) { result in
+                do { receiptURL = try result.get() } catch { errorMessage = "Could not select the receipt." }
             }
             .sheet(isPresented: $showingScanner) {
                 ReceiptScannerView(onScanComplete: { scannedData in
@@ -724,37 +747,40 @@ struct ExpenseFormSheet: View {
         errorMessage = nil
 
         do {
+            if let receiptURL, uploadedReceipt == nil { uploadedReceipt = try await ReceiptStorage().upload(url: receiptURL) }
+            captureStarted = true
             if let existingExpense = expense {
                 _ = try await expenseRepository.updateExpense(
                     id: existingExpense.id,
                     description: description,
                     amount: amountValue,
-                    currency: "USD",
+                    currency: currency,
                     category: category.rawValue,
                     merchant: merchant.isEmpty ? nil : merchant,
                     expenseDate: expenseDate,
                     projectId: selectedProjectId,
                     notes: notes.isEmpty ? nil : notes,
-                    status: existingExpense.status.rawValue
+                    status: existingExpense.status.rawValue,
+                    expectedVersion: existingExpense.version
                 )
             } else {
                 _ = try await expenseRepository.createExpense(
                     description: description,
                     amount: amountValue,
-                    currency: "USD",
+                    currency: currency,
                     category: category.rawValue,
                     merchant: merchant.isEmpty ? nil : merchant,
                     expenseDate: expenseDate,
                     projectId: selectedProjectId,
                     notes: notes.isEmpty ? nil : notes,
-                    status: "DRAFT"
+                    status: "DRAFT", attempt: captureAttempt, receiptPath: uploadedReceipt
                 )
             }
 
             onSave()
             isPresented = false
         } catch {
-            errorMessage = "Failed to save expense: \(error.localizedDescription)"
+            errorMessage = "Failed to save expense: \(RecordError.safe(error).localizedDescription)"
         }
 
         isSaving = false
@@ -993,6 +1019,7 @@ private extension String {
 // MARK: - Expense Detail Sheet
 
 struct ExpenseDetailSheet: View {
+    @Environment(\.openURL) private var openURL
     let expense: Expense
     var onUpdate: () -> Void
 
@@ -1048,6 +1075,10 @@ struct ExpenseDetailSheet: View {
                         }
 
                         if expense.hasReceipt {
+                            Button("Open Receipt") { Task {
+                                do { let url = try await ReceiptStorage().signedURL(for: expense); openURL(url) }
+                                catch { errorMessage = "Could not open the receipt. Check access and try again." }
+                            } }
                             Divider()
                             HStack {
                                 Image(systemName: "doc.fill")
@@ -1083,7 +1114,7 @@ struct ExpenseDetailSheet: View {
                             }
                         }
 
-                        if expense.status == .submitted && appState.hasCapability(.approveExpenses) {
+                        if expense.status == .submitted && expense.userId != appState.currentUser?.id && appState.hasCapability(.approveExpenses) {
                             HStack(spacing: 12) {
                                 Button(action: { Task { await rejectExpense() } }) {
                                     HStack {
@@ -1171,11 +1202,11 @@ struct ExpenseDetailSheet: View {
         errorMessage = nil
 
         do {
-            _ = try await expenseRepository.updateStatus(id: expense.id, status: "SUBMITTED")
+            _ = try await expenseRepository.updateStatus(id: expense.id, status: "SUBMITTED", expectedVersion: expense.version)
             onUpdate()
             dismiss()
         } catch {
-            errorMessage = "Failed to submit expense: \(error.localizedDescription)"
+            errorMessage = "Failed to submit expense: \(RecordError.safe(error).localizedDescription)"
         }
 
         isUpdating = false
@@ -1186,11 +1217,11 @@ struct ExpenseDetailSheet: View {
         errorMessage = nil
 
         do {
-            _ = try await expenseRepository.updateStatus(id: expense.id, status: "APPROVED")
+            _ = try await expenseRepository.updateStatus(id: expense.id, status: "APPROVED", expectedVersion: expense.version)
             onUpdate()
             dismiss()
         } catch {
-            errorMessage = "Failed to approve expense: \(error.localizedDescription)"
+            errorMessage = "Failed to approve expense: \(RecordError.safe(error).localizedDescription)"
         }
 
         isUpdating = false
@@ -1201,11 +1232,11 @@ struct ExpenseDetailSheet: View {
         errorMessage = nil
 
         do {
-            _ = try await expenseRepository.updateStatus(id: expense.id, status: "REJECTED")
+            _ = try await expenseRepository.updateStatus(id: expense.id, status: "REJECTED", expectedVersion: expense.version)
             onUpdate()
             dismiss()
         } catch {
-            errorMessage = "Failed to reject expense: \(error.localizedDescription)"
+            errorMessage = "Failed to reject expense: \(RecordError.safe(error).localizedDescription)"
         }
 
         isUpdating = false
@@ -1226,7 +1257,7 @@ struct ExpenseViewContent: View {
                 HStack(spacing: 12) {
                     ExpenseSummaryCard(
                         title: "Total",
-                        value: String(format: "$%.2f", viewModel.totalExpenses),
+                        value: viewModel.totalExpenses.formatted(.currency(code: appState.currentUser?.reportingCurrency ?? "USD")),
                         icon: "dollarsign.circle",
                         color: .blue
                     )
@@ -1240,7 +1271,7 @@ struct ExpenseViewContent: View {
 
                     ExpenseSummaryCard(
                         title: "Approved",
-                        value: String(format: "$%.2f", viewModel.approvedTotal),
+                        value: viewModel.approvedTotal.formatted(.currency(code: appState.currentUser?.reportingCurrency ?? "USD")),
                         icon: "checkmark.circle",
                         color: .green
                     )

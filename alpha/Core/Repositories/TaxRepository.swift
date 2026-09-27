@@ -14,141 +14,15 @@ class TaxRepository {
     private let expenseRepository = ExpenseRepository()
     private let invoiceRepository = InvoiceRepository()
 
-    func fetchTaxDashboard() async throws -> TaxDashboard {
+    func fetchTaxFilings() async throws -> [TaxFiling] {
         let scope = try await ownershipResolver.currentScope()
-        async let filingsTask = fetchTaxFilings(userId: scope.userId)
-        async let expensesTask = expenseRepository.fetchExpenses()
-        async let invoicesTask = invoiceRepository.fetchInvoices(limit: 500)
-
-        let filings = (try? await filingsTask) ?? []
-        let expenses = (try? await expensesTask) ?? []
-        let invoices = (try? await invoicesTask) ?? []
-        let calendar = Calendar.current
-        let currentYear = calendar.component(.year, from: Date())
-
-        let taxYearExpenses = expenses.filter {
-            calendar.component(.year, from: $0.expenseDate) == currentYear
+        var rows: [TaxFiling] = []
+        while true {
+            let response = try await supabase.from("tax_filings").select().eq("user_id", value: scope.userId).order("due_date").order("id").range(from: rows.count, to: rows.count + 199).execute()
+            let batch = try RecordCoding.decoder().decode([TaxFilingRowDTO].self, from: response.data)
+            rows += batch.map { $0.taxFiling }
+            if batch.count < 200 { return rows }
         }
-        let taxYearInvoices = invoices.filter {
-            calendar.component(.year, from: $0.issueDate) == currentYear &&
-            [.sent, .paid, .overdue].contains($0.status)
-        }
-
-        let expenseTotal = taxYearExpenses.reduce(0) { $0 + $1.amount }
-        let incomeTotal = taxYearInvoices.reduce(0) { $0 + $1.total }
-        let netIncome = max(0, incomeTotal - expenseTotal)
-        let selfEmploymentTax = estimateSelfEmploymentTax(netIncome * 0.9235)
-        let federalTax = estimateFederalTax(max(0, netIncome - (selfEmploymentTax / 2)))
-        let estimatedTax = federalTax + selfEmploymentTax
-
-        let upcomingDeadlines = filings
-            .filter { $0.status != .filed && $0.status != .accepted }
-            .map { filing in
-                TaxDeadline(
-                    id: filing.id,
-                    type: filing.type,
-                    dueDate: filing.dueDate,
-                    description: filing.name,
-                    amount: filing.amount,
-                    status: filing.dueDate < Date() ? .overdue : .pending
-                )
-            }
-            .sorted { $0.dueDate < $1.dueDate }
-
-        let filedCount = filings.filter { $0.status == .filed || $0.status == .accepted }.count
-        let compliancePercentage = filings.isEmpty
-            ? 100
-            : (Double(filedCount) / Double(filings.count)) * 100
-
-        let uncategorizedExpenseCount = taxYearExpenses.filter { $0.category == .other }.count
-        let overdueFilingCount = upcomingDeadlines.filter { $0.status == .overdue }.count
-        let exportWarningCount = [
-            overdueFilingCount,
-            uncategorizedExpenseCount,
-            taxYearExpenses.isEmpty ? 1 : 0,
-            taxYearInvoices.isEmpty ? 1 : 0
-        ].filter { $0 > 0 }.count
-
-        let nextDeadline = upcomingDeadlines.first
-
-        return TaxDashboard(
-            taxLiability: TaxLiability(
-                estimatedQuarterly: estimatedTax / 4,
-                yearToDate: estimatedTax,
-                nextPayment: nextDeadline?.amount ?? estimatedTax / 4,
-                nextPaymentDate: nextDeadline?.dueDate ?? nextEstimatedTaxDueDate()
-            ),
-            complianceRate: ComplianceRate(
-                percentage: compliancePercentage,
-                filedOnTime: filedCount,
-                totalRequired: filings.count
-            ),
-            upcomingDeadlines: upcomingDeadlines,
-            filings: filings.sorted { $0.dueDate < $1.dueDate },
-            taxExpenseCount: taxYearExpenses.count,
-            taxExpenseTotal: expenseTotal,
-            taxIncomeCount: taxYearInvoices.count,
-            taxIncomeTotal: incomeTotal,
-            exportWarningCount: exportWarningCount
-        )
-    }
-
-    private func fetchTaxFilings(userId: String) async throws -> [TaxFiling] {
-        let response = try await supabase
-            .from("tax_filings")
-            .select()
-            .eq("user_id", value: userId)
-            .order("due_date")
-            .execute()
-
-        let rows = try JSONDecoder().decode([TaxFilingRowDTO].self, from: response.data)
-        return rows.map { $0.taxFiling }
-    }
-
-    private func estimateFederalTax(_ income: Double) -> Double {
-        let standardDeduction = 14_600.0
-        var taxableIncome = max(0, income - standardDeduction)
-        var tax = 0.0
-
-        let brackets: [(limit: Double, rate: Double)] = [
-            (11_600, 0.10),
-            (47_150, 0.12),
-            (100_525, 0.22),
-            (191_950, 0.24),
-            (243_725, 0.32),
-            (.greatestFiniteMagnitude, 0.35)
-        ]
-
-        var previousLimit = 0.0
-        for bracket in brackets where taxableIncome > 0 {
-            let taxable = min(taxableIncome, bracket.limit - previousLimit)
-            tax += taxable * bracket.rate
-            taxableIncome -= taxable
-            previousLimit = bracket.limit
-        }
-
-        return tax
-    }
-
-    private func estimateSelfEmploymentTax(_ netEarnings: Double) -> Double {
-        guard netEarnings > 0 else { return 0 }
-        let socialSecurityWageBase = 168_600.0
-        let socialSecurity = min(netEarnings, socialSecurityWageBase) * 0.124
-        let medicare = netEarnings * 0.029
-        return socialSecurity + medicare
-    }
-
-    private func nextEstimatedTaxDueDate() -> Date {
-        let calendar = Calendar.current
-        let year = calendar.component(.year, from: Date())
-        let candidates = [
-            DateComponents(year: year, month: 4, day: 15),
-            DateComponents(year: year, month: 6, day: 16),
-            DateComponents(year: year, month: 9, day: 15),
-            DateComponents(year: year + 1, month: 1, day: 15)
-        ].compactMap { calendar.date(from: $0) }
-
-        return candidates.first { $0 >= Date() } ?? candidates.last ?? Date()
     }
 }
 

@@ -8,12 +8,18 @@
 import SwiftUI
 
 struct CreateInvoiceSheet: View {
+    @EnvironmentObject private var appState: AppState
     @Binding var isPresented: Bool
+    @State private var attempt = RecordAttempt()
+    @State private var attempted = false
     @State private var selectedContact: Contact?
     @State private var contacts: [Contact] = []
     @State private var isLoadingContacts = false
     @State private var lineItems: [LineItem] = [LineItem()]
     @State private var dueDate = Date()
+    @State private var issueDate = Date()
+    @State private var currency = "USD"
+    @State private var taxRate = 0.0
     @State private var notes = ""
     @State private var showingNewContact = false
     @State private var showingTimeEntries = false
@@ -35,7 +41,7 @@ struct CreateInvoiceSheet: View {
             }
             return total
         }
-        return lineItemsTotal + timeEntriesTotal
+        return RecordCoding.money((lineItemsTotal + timeEntriesTotal) * (1 + taxRate / 100))
     }
 
     var body: some View {
@@ -155,7 +161,7 @@ struct CreateInvoiceSheet: View {
                                     Text("Rate")
                                         .font(.alphaCaption)
                                         .foregroundColor(.alphaSecondaryText)
-                                    TextField("0.00", value: $item.rate, format: .currency(code: "USD"))
+                                    TextField("0.00", value: $item.rate, format: .currency(code: currency))
                                         .keyboardType(.decimalPad)
                                         .textFieldStyle(.roundedBorder)
                                 }
@@ -164,7 +170,7 @@ struct CreateInvoiceSheet: View {
                                     Text("Total")
                                         .font(.alphaCaption)
                                         .foregroundColor(.alphaSecondaryText)
-                                    Text(item.total, format: .currency(code: "USD"))
+                                    Text(item.total, format: .currency(code: currency))
                                         .font(.alphaBody)
                                         .fontWeight(.semibold)
                                         .foregroundColor(.alphaPrimary)
@@ -195,7 +201,7 @@ struct CreateInvoiceSheet: View {
                             .font(.alphaBody)
                             .fontWeight(.semibold)
                         Spacer()
-                        Text(totalAmount, format: .currency(code: "USD"))
+                        Text(totalAmount, format: .currency(code: currency))
                             .font(.alphaTitle)
                             .fontWeight(.bold)
                     }
@@ -208,6 +214,9 @@ struct CreateInvoiceSheet: View {
                 }
 
                 Section {
+                    Picker("Currency", selection: $currency) { ForEach(RecordCoding.currencies, id: \.self) { Text($0) } }
+                    DatePicker("Issue Date", selection: $issueDate, displayedComponents: .date)
+                    TextField("Tax rate (%)", value: $taxRate, format: .number).keyboardType(.decimalPad)
                     DatePicker("Due Date", selection: $dueDate, displayedComponents: .date)
 
                     TextField("Notes", text: $notes, prompt: Text("Optional"), axis: .vertical)
@@ -219,6 +228,7 @@ struct CreateInvoiceSheet: View {
                         .textCase(nil)
                 }
             }
+            .disabled(attempted)
             .navigationTitle("Create Invoice")
             .navigationBarTitleDisplayMode(.inline)
             .overlay {
@@ -267,6 +277,10 @@ struct CreateInvoiceSheet: View {
                 }
             }
             .task {
+                currency = appState.currentUser?.reportingCurrency ?? "USD"
+                let preference = appState.currentUser?.preferences
+                taxRate = preference?["default_tax_rate"]?.value as? Double ?? Double(preference?["default_tax_rate"]?.value as? Int ?? 0)
+                dueDate = Calendar.current.date(byAdding: .day, value: preference?["payment_terms"]?.value as? Int ?? 30, to: issueDate) ?? issueDate
                 await loadContacts()
             }
             .sheet(isPresented: $showingNewContact) {
@@ -287,7 +301,7 @@ struct CreateInvoiceSheet: View {
     }
 
     private var isFormValid: Bool {
-        guard selectedContact != nil else { return false }
+        guard selectedContact != nil, taxRate.isFinite, (0...100).contains(taxRate), RecordCoding.day(dueDate) >= RecordCoding.day(issueDate) else { return false }
 
         // Need either time entries or at least one valid line item
         let hasTimeEntries = !selectedTimeEntries.isEmpty
@@ -310,7 +324,7 @@ struct CreateInvoiceSheet: View {
         do {
             contacts = try await clientRepository.fetchClients()
         } catch {
-            print("Failed to load contacts: \(error)")
+            errorMessage = "Could not load clients. Reopen the form to retry."
             contacts = []
         }
 
@@ -327,50 +341,20 @@ struct CreateInvoiceSheet: View {
             // Convert time entries to line items
             var allLineItems: [InvoiceLineItemCreate] = []
 
-            // Group time entries by project for cleaner invoices
-            let entriesByProject = Dictionary(grouping: selectedTimeEntries) { $0.projectId }
-            for (_, entries) in entriesByProject {
-                let projectName = entries.first?.project?.name ?? "Time Entry"
-                let totalHours = entries.reduce(0) { $0 + $1.durationHours }
-                let rate = entries.first?.billableRate ?? entries.first?.project?.rate ?? 0
-
-                if totalHours > 0 {
-                    allLineItems.append(InvoiceLineItemCreate(
-                        description: "\(projectName) - \(String(format: "%.1f", totalHours)) hours",
-                        quantity: totalHours,
-                        rate: rate
-                    ))
-                }
-            }
-
-            // Add manual line items
-            for item in lineItems where !item.description.isEmpty && item.rate > 0 {
-                allLineItems.append(InvoiceLineItemCreate(
-                    description: item.description,
-                    quantity: item.quantity,
-                    rate: item.rate
-                ))
-            }
-
-            let invoice = try await invoiceRepository.createInvoice(
-                clientId: contact.id,
-                projectId: nil,
-                dueDate: dueDate,
-                lineItems: allLineItems,
-                taxRate: nil,
-                notes: notes.isEmpty ? nil : notes,
-                currency: "USD"
-            )
-
-            // Mark time entries as invoiced
+            attempted = true
             if !selectedTimeEntries.isEmpty {
-                let entryIds = selectedTimeEntries.map { $0.id }
-                try await timeEntryRepository.markAsInvoiced(ids: entryIds, invoiceId: invoice.id)
+                guard !lineItems.contains(where: { !$0.description.isEmpty && $0.rate > 0 }) else {
+                    throw RecordError(message: "Create a separate invoice for manual lines. Time invoices reserve eligible entries from one project.")
+                }
+                try await invoiceRepository.createFromTime(entries: selectedTimeEntries, clientId: contact.id, dueDate: dueDate, currency: currency, attempt: attempt, issueDate: issueDate, taxRate: taxRate)
+            } else {
+                allLineItems = lineItems.filter { !$0.description.isEmpty }.map { InvoiceLineItemCreate(description: $0.description, quantity: $0.quantity, rate: $0.rate) }
+                _ = try await invoiceRepository.createInvoice(clientId: contact.id, projectId: nil, dueDate: dueDate, lineItems: allLineItems, taxRate: taxRate, notes: notes, currency: currency, attempt: attempt, issueDate: issueDate)
             }
 
             isPresented = false
         } catch {
-            errorMessage = "Failed to create invoice: \(error.localizedDescription)"
+            errorMessage = "Failed to create invoice: \(RecordError.safe(error).localizedDescription)"
         }
 
         isSubmitting = false

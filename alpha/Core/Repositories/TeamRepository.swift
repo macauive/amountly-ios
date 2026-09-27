@@ -21,7 +21,7 @@ class TeamRepository {
             .order("created_at", ascending: false)
             .execute()
 
-        let members: [TeamMember] = try JSONDecoder().decode([TeamMember].self, from: response.data)
+        let members: [TeamMember] = try RecordCoding.decoder().decode([TeamMember].self, from: response.data)
         return members
     }
 
@@ -36,7 +36,7 @@ class TeamRepository {
             .limit(limit)
             .execute()
 
-        let entries: [AuditLogEntry] = try JSONDecoder().decode([AuditLogEntry].self, from: response.data)
+        let entries: [AuditLogEntry] = try RecordCoding.decoder().decode([AuditLogEntry].self, from: response.data)
         return entries
     }
 
@@ -62,7 +62,7 @@ class TeamRepository {
             .single()
             .execute()
 
-        let member: TeamMember = try JSONDecoder().decode(TeamMember.self, from: response.data)
+        let member: TeamMember = try RecordCoding.decoder().decode(TeamMember.self, from: response.data)
         return member
     }
 

@@ -189,3 +189,9 @@ extension User {
         updatedAt: Date()
     )
 }
+
+extension User {
+    var reportingCurrency: String { preferences?["default_currency"]?.value as? String ?? "USD" }
+    var incomeBasis: String { preferences?["accounting_basis"]?.value as? String ?? "cash" }
+    var fiscalStartMonth: Int { let value = preferences?["fiscal_year_start"]?.value as? Int ?? 1; return (1...12).contains(value) ? value : 1 }
+}

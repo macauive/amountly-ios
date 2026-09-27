@@ -142,7 +142,7 @@ class TasksViewModel: ObservableObject {
 
     private func groupEntries() {
         // Group by project first
-        let projectDict = Dictionary(grouping: timeEntries) { $0.projectId }
+        let projectDict = Dictionary(grouping: timeEntries) { $0.projectId ?? "unassigned" }
 
         projectGroups = projectDict.compactMap { projectId, entries in
             guard let firstEntry = entries.first else { return nil }
@@ -189,7 +189,7 @@ class TasksViewModel: ObservableObject {
                     organizationId: nil,
                     userId: nil,
                     clientId: nil,
-                    name: "Unknown Project",
+                    name: "Unassigned Work",
                     description: nil,
                     billingModel: .hourly,
                     rate: nil,

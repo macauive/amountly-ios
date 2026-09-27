@@ -5,6 +5,18 @@
 	};
 	objectVersion = 77;
 	objects = {
+        A10000000000000000000001 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = AmountlyIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+        A10000000000000000000002 = {isa = PBXFileSystemSynchronizedRootGroup; path = IntegrationTests; sourceTree = "<group>"; };
+        A10000000000000000000003 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+        A10000000000000000000004 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000000C,); runOnlyForDeploymentPostprocessing = 0; };
+        A10000000000000000000005 = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000006; buildPhases = (A10000000000000000000003,A10000000000000000000004,); buildRules = (); dependencies = (A1000000000000000000000B,); fileSystemSynchronizedGroups = (A10000000000000000000002,); name = AmountlyIntegrationTests; packageProductDependencies = (321F54DC2EF4B3A00015776B,); productName = AmountlyIntegrationTests; productReference = A10000000000000000000001; productType = "com.apple.product-type.bundle.unit-test"; };
+        A10000000000000000000006 = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000007,A10000000000000000000008,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+        A10000000000000000000007 = {isa = XCBuildConfiguration; name = Debug; buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/alpha.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/alpha"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 3M8CLGNQCD; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = macaulay.amountly.integrationtests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; };
+        A10000000000000000000008 = {isa = XCBuildConfiguration; name = Release; buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/alpha.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/alpha"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 3M8CLGNQCD; GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = macaulay.amountly.integrationtests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; };
+        A1000000000000000000000A = {isa = PBXContainerItemProxy; containerPortal = 328B43632ED6866100A54289; proxyType = 1; remoteGlobalIDString = 328B436A2ED6866100A54289; remoteInfo = alpha; };
+        A1000000000000000000000B = {isa = PBXTargetDependency; target = 328B436A2ED6866100A54289; targetProxy = A1000000000000000000000A; };
+        A1000000000000000000000C = {isa = PBXBuildFile; productRef = 321F54DC2EF4B3A00015776B; };
+
 
 /* Begin PBXBuildFile section */
 		321F54DB2EF4B3A00015776B /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 321F54DC2EF4B3A00015776B /* Supabase */; };
@@ -38,6 +50,7 @@
 			isa = PBXGroup;
 			children = (
 				328B436D2ED6866100A54289 /* alpha */,
+                A10000000000000000000002,
 				328B436C2ED6866100A54289 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,6 +59,7 @@
 			isa = PBXGroup;
 			children = (
 				328B436B2ED6866100A54289 /* alpha.app */,
+                A10000000000000000000001,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,7 +122,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				328B436A2ED6866100A54289 /* alpha */,
+                A10000000000000000000005,				328B436A2ED6866100A54289 /* alpha */,
 			);
 		};
 /* End PBXProject section */

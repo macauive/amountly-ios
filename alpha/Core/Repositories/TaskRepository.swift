@@ -19,7 +19,7 @@ class TaskRepository {
             .order("name")
             .execute()
 
-        let tasks: [ProjectTask] = try JSONDecoder().decode([ProjectTask].self, from: response.data)
+        let tasks: [ProjectTask] = try RecordCoding.decoder().decode([ProjectTask].self, from: response.data)
         return tasks
     }
 
@@ -31,7 +31,7 @@ class TaskRepository {
             .single()
             .execute()
 
-        let task: ProjectTask = try JSONDecoder().decode(ProjectTask.self, from: response.data)
+        let task: ProjectTask = try RecordCoding.decoder().decode(ProjectTask.self, from: response.data)
         return task
     }
 
@@ -55,7 +55,7 @@ class TaskRepository {
             .single()
             .execute()
 
-        let task: ProjectTask = try JSONDecoder().decode(ProjectTask.self, from: response.data)
+        let task: ProjectTask = try RecordCoding.decoder().decode(ProjectTask.self, from: response.data)
         return task
     }
 

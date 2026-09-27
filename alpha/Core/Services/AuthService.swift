@@ -62,19 +62,11 @@ class AuthService {
             throw AuthError.notAuthenticated
         }
 
-        do {
-            let response = try await supabase
-                .from("users")
-                .select()
-                .eq("id", value: userId.uuidString)
-                .single()
-                .execute()
+        let response = try await supabase.from("users").select().eq("id", value: userId.uuidString).execute()
+        let users = try decoder.decode([User].self, from: response.data)
+        if let user = users.first, !user.isActive { throw RecordError(message: "This account is inactive.") }
+        return users.first
 
-            return try decoder.decode(User.self, from: response.data)
-        } catch {
-            // User doesn't exist in database yet
-            return nil
-        }
     }
 
     // MARK: - Restore Authenticated State
@@ -87,9 +79,12 @@ class AuthService {
         do {
             let (user, organization) = try await fetchAuthenticatedAppState(for: session)
             return RestoredAppState(user: user, organization: organization)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
         } catch {
-            print("❌ AuthService.restoreAuthenticatedState: failed to hydrate restored session: \(error)")
-            try? await supabase.auth.signOut()
+            print("Authentication operation failed; retry or sign in again.")
             throw AuthError.restoreFailed(underlying: error)
         }
     }
@@ -111,7 +106,7 @@ class AuthService {
             email: email,
             name: name,
             accountType: accountType.rawValue,
-            role: accountType.defaultRole
+            role: "MEMBER"
         )
 
         let response = try await supabase
@@ -167,7 +162,7 @@ class AuthService {
 
     func signUp(email: String, password: String, name: String) async throws {
         // Create auth user with name in metadata
-        print("🔐 AuthService.signUp: Creating user with name: \(name)")
+        print("AuthService.signUp: Creating user")
 
         _ = try await supabase.auth.signUp(
             email: email,
@@ -180,20 +175,8 @@ class AuthService {
     // MARK: - Sign In with Password
 
     func signInWithPassword(email: String, password: String) async throws {
-        print("🔐 AuthService.signInWithPassword: Signing in \(email)")
-        let response = try await supabase.auth.signIn(
-            email: email,
-            password: password
-        )
-        print("✅ AuthService.signInWithPassword: Sign in successful")
-        print("🔐 AuthService.signInWithPassword: User role: \(response.user.role ?? "none")")
+        _ = try await supabase.auth.signIn(email: email, password: password)
 
-        // Refresh session to ensure we have "authenticated" role
-        // This mirrors the pattern in verifyOTP() which successfully gets authenticated role
-        print("🔄 AuthService.signInWithPassword: Refreshing session to ensure authenticated role...")
-        let refreshedSession = try await supabase.auth.refreshSession()
-        print("✅ AuthService.signInWithPassword: Session refreshed with authenticated role")
-        print("🔑 AuthService.signInWithPassword: Access token: \(refreshedSession.accessToken.prefix(30))...")
     }
 
     // MARK: - Sign Out
@@ -207,7 +190,7 @@ class AuthService {
     // MARK: - Email Verification (OTP)
 
     func verifyOTP(email: String, token: String) async throws -> Session {
-        print("🔐 AuthService.verifyOTP: Starting OTP verification for \(email)")
+        print("🔐 AuthService.verifyOTP: Starting OTP verification")
 
         let response = try await supabase.auth.verifyOTP(
             email: email,
@@ -221,9 +204,7 @@ class AuthService {
         // Session might be in the response or need to be fetched
         if let responseSession = response.session {
             print("🔐 AuthService.verifyOTP: Session found in response")
-            print("🔐 AuthService.verifyOTP: Access token: \(responseSession.accessToken.prefix(30))...")
             print("🔐 AuthService.verifyOTP: Token type: \(responseSession.tokenType)")
-            print("🔐 AuthService.verifyOTP: Refresh token: \(responseSession.refreshToken.prefix(30))...")
 
             // CRITICAL: Refresh the session to get a new JWT with the "authenticated" role
             // After OTP verification, the JWT might still have role: "anon"
@@ -233,21 +214,20 @@ class AuthService {
             do {
                 let refreshedSession = try await supabase.auth.refreshSession()
                 print("✅ AuthService.verifyOTP: Session refreshed")
-                print("🔐 AuthService.verifyOTP: New access token: \(refreshedSession.accessToken.prefix(30))...")
 
                 // Verify the refreshed session is stored
                 try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
 
                 if let storedSession = supabase.auth.currentSession {
                     print("✅ AuthService.verifyOTP: Refreshed session stored in client: \(storedSession.user.id)")
-                    print("✅ AuthService.verifyOTP: Tokens match: \(storedSession.accessToken == refreshedSession.accessToken)")
+                    print("✅ AuthService.verifyOTP: Refreshed session verified")
                 } else {
                     print("⚠️ AuthService.verifyOTP: WARNING - Refreshed session not stored in client!")
                 }
 
                 return refreshedSession
             } catch {
-                print("⚠️ AuthService.verifyOTP: Session refresh failed: \(error)")
+                print("Authentication operation failed; retry or sign in again.")
                 print("⚠️ AuthService.verifyOTP: Falling back to original session")
 
                 // Fall back to original session if refresh fails
@@ -280,7 +260,7 @@ class AuthService {
     }
 
     func resendOTP(email: String) async throws {
-        print("📧 AuthService: Resending OTP to \(email)")
+        print("📧 AuthService: Resending OTP")
         try await supabase.auth.resend(email: email, type: .signup)
         print("✅ AuthService: OTP resend request sent")
     }
@@ -316,7 +296,7 @@ class AuthService {
             return presence.organizationId != nil
         } catch {
             // User doesn't exist in users table yet (no organization)
-            print("❌ AuthService.userHasOrganization: User has no organization: \(error)")
+            print("Authentication operation failed; retry or sign in again.")
             return false
         }
     }
@@ -350,11 +330,11 @@ class AuthService {
         let userId = session.user.id
         let email = session.user.email ?? ""
         print("✅ AuthService.setupOrganization: Session found for user: \(userId)")
-        print("📧 AuthService.setupOrganization: Email: \(email)")
+        print("📧 AuthService.setupOrganization: Email present: \(!email.isEmpty)")
         print("🔐 AuthService.setupOrganization: Email confirmed: \(session.user.emailConfirmedAt != nil)")
 
         // Step 1: Create organization
-        print("🏢 AuthService.setupOrganization: Creating organization '\(companyName)'")
+        print("AuthService.setupOrganization: Creating organization")
         let orgInsert = OrganizationInsert(
             name: companyName,
             email: email,
@@ -364,7 +344,6 @@ class AuthService {
         do {
             // DEBUG: Print the actual request details
             print("🔍 AuthService.setupOrganization: About to insert organization")
-            print("🔍 AuthService.setupOrganization: Data: \(orgInsert)")
 
             let orgResponse = try await supabase
                 .from("organizations")
@@ -400,12 +379,7 @@ class AuthService {
 
             return (user, organization)
         } catch {
-            print("❌ AuthService.setupOrganization: Failed with error: \(error)")
-            print("❌ AuthService.setupOrganization: Error details: \(error.localizedDescription)")
-
-            // Print detailed error information
-            print("❌ Error type: \(type(of: error))")
-            print("❌ Error description: \(error.localizedDescription)")
+            print("AuthService.setupOrganization: Failed to complete setup.")
 
             throw error
         }
@@ -413,11 +387,7 @@ class AuthService {
 
     // MARK: - Private Helpers
 
-    private let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
+    private let decoder = RecordCoding.decoder()
 
     private func fetchAuthenticatedAppState(for session: Session) async throws -> (User, Organization?) {
         let user = try await fetchUser(for: session)
@@ -433,7 +403,9 @@ class AuthService {
             .single()
             .execute()
 
-        return try decoder.decode(User.self, from: response.data)
+        let user = try decoder.decode(User.self, from: response.data)
+        guard user.isActive else { throw RecordError(message: "This account is inactive.") }
+        return user
     }
 
     private func fetchOrganizationIfNeeded(for user: User) async throws -> Organization? {

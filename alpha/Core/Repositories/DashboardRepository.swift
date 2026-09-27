@@ -33,10 +33,10 @@ class DashboardRepository {
 
         // Fetch invoices
         let invoices = try await invoiceRepository.fetchInvoices()
-        let paidInvoices = invoices.filter { $0.status == .paid }
-        let totalRevenue = paidInvoices.reduce(0.0) { $0 + $1.total }
-        let outstandingInvoices = invoices.filter { $0.status == .sent || $0.status == .draft }
-        let outstandingRevenue = outstandingInvoices.reduce(0.0) { $0 + $1.total }
+        let payments = invoices.flatMap { $0.payments ?? [] }.filter { !$0.isReversed && $0.paid_on >= startOfMonth && $0.paid_on <= now }
+        let totalRevenue = FinancialRules.sum(payments.map(\.amount))
+        let outstandingInvoices = invoices.filter { $0.status == .sent || $0.status == .overdue }
+        let outstandingRevenue = FinancialRules.sum(outstandingInvoices.map(\.balanceDue))
         let pendingInvoicesCount = outstandingInvoices.count
 
         // Return metrics with correct parameter order matching BusinessMetrics struct

@@ -13,9 +13,10 @@ import Combine
 @MainActor
 class BillingViewModel: ObservableObject {
     @Published var invoices: [Invoice] = []
+    private var currency = "USD"
     @Published var isLoading = false
     @Published var errorMessage: String?
-    @Published var selectedFilter: InvoiceFilter = .outstanding
+    @Published var selectedFilter: InvoiceFilter = .all
 
     // Summary metrics
     @Published var outstandingCount: Int = 0
@@ -45,6 +46,7 @@ class BillingViewModel: ObservableObject {
         errorMessage = nil
 
         do {
+            currency = try await AuthService.shared.getCurrentUser().reportingCurrency
             invoices = try await invoiceRepository.fetchInvoices()
             calculateSummaries()
         } catch {
@@ -61,7 +63,7 @@ class BillingViewModel: ObservableObject {
             _ = try await invoiceRepository.markAsPaid(id: invoiceId)
             await loadInvoices()
         } catch {
-            errorMessage = "Failed to update invoice: \(error.localizedDescription)"
+            errorMessage = "Failed to update invoice: \(RecordError.safe(error).localizedDescription)"
         }
     }
 
@@ -70,16 +72,16 @@ class BillingViewModel: ObservableObject {
             _ = try await invoiceRepository.sendInvoice(id: invoiceId)
             await loadInvoices()
         } catch {
-            errorMessage = "Failed to send invoice: \(error.localizedDescription)"
+            errorMessage = "Failed to send invoice: \(RecordError.safe(error).localizedDescription)"
         }
     }
 
     // MARK: - Private Methods
 
     private func calculateSummaries() {
-        let outstanding = invoices.filter { $0.status == .sent || $0.status == .overdue }
+        let outstanding = invoices.filter { $0.currency == currency && ($0.status == .sent || $0.status == .overdue) }
         outstandingCount = outstanding.count
-        outstandingTotal = outstanding.reduce(0) { $0 + $1.total }
+        outstandingTotal = outstanding.reduce(0) { $0 + $1.balanceDue }
 
         draftCount = invoices.filter { $0.status == .draft }.count
 
@@ -87,11 +89,8 @@ class BillingViewModel: ObservableObject {
         let calendar = Calendar.current
         let now = Date()
         let startOfMonth = calendar.dateInterval(of: .month, for: now)?.start ?? now
-        let paidInvoices = invoices.filter { invoice in
-            guard invoice.status == .paid, let paidAt = invoice.paidAt else { return false }
-            return paidAt >= startOfMonth
-        }
-        paidThisMonth = paidInvoices.reduce(0) { $0 + $1.total }
+        paidThisMonth = invoices.filter { $0.currency == currency }.flatMap { $0.payments ?? [] }.filter { !$0.isReversed && $0.paid_on >= startOfMonth && $0.paid_on <= now }.reduce(0) { $0 + $1.amount }
+
     }
 }
 
@@ -179,6 +178,7 @@ struct BillingView: View {
                 })
                 .withAppTheme()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .recordsChanged)) { _ in Task { await viewModel.loadInvoices() } }
             .sheet(isPresented: $showingCreateInvoice) {
                 CreateInvoiceSheet(isPresented: $showingCreateInvoice)
                     .withAppTheme()
@@ -296,6 +296,7 @@ struct BillingView: View {
 @MainActor
 class BillsViewModel: ObservableObject {
     @Published var bills: [Bill] = []
+    private var currency = "USD"
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var selectedFilter: BillListFilter = .open
@@ -324,10 +325,11 @@ class BillsViewModel: ObservableObject {
         errorMessage = nil
 
         do {
+            currency = try await AuthService.shared.getCurrentUser().reportingCurrency
             bills = try await billRepository.fetchBills()
             calculateSummaries()
         } catch {
-            errorMessage = "Failed to load bills: \(error.localizedDescription)"
+            errorMessage = "Failed to load bills: \(RecordError.safe(error).localizedDescription)"
             bills = []
             calculateSummaries()
         }
@@ -337,33 +339,33 @@ class BillsViewModel: ObservableObject {
 
     func markPaid(_ bill: Bill) async {
         do {
-            _ = try await billRepository.markBillPaid(id: bill.id)
+            try await billRepository.action(bill, action: "pay", paidOn: Date())
             await loadBills()
         } catch {
-            errorMessage = "Failed to mark bill paid: \(error.localizedDescription)"
+            errorMessage = "Failed to mark bill paid: \(RecordError.safe(error).localizedDescription)"
         }
     }
 
     func deleteBill(_ bill: Bill) async {
         do {
-            try await billRepository.deleteBill(id: bill.id)
+            try await billRepository.action(bill, action: "cancel")
             await loadBills()
         } catch {
-            errorMessage = "Failed to delete bill: \(error.localizedDescription)"
+            errorMessage = "Failed to delete bill: \(RecordError.safe(error).localizedDescription)"
         }
     }
 
     private func calculateSummaries() {
         let calendar = Calendar.current
-        let now = Date()
+        let now = Calendar.current.startOfDay(for: Date())
         let weekFromNow = calendar.date(byAdding: .day, value: 7, to: now) ?? now
         let startOfMonth = calendar.dateInterval(of: .month, for: now)?.start ?? now
 
-        let openBills = bills.filter { !$0.isPaid && $0.status != .cancelled }
+        let openBills = bills.filter { $0.currency == currency && !$0.isPaid && $0.status != .cancelled }
         unpaidTotal = openBills.reduce(0) { $0 + $1.amount }
         dueThisWeekCount = openBills.filter { $0.dueDate >= now && $0.dueDate <= weekFromNow }.count
         paidThisMonthTotal = bills.filter { bill in
-            guard bill.isPaid, let paidAt = bill.paidAt else { return false }
+            guard bill.currency == currency, bill.isPaid, let paidAt = bill.paidAt else { return false }
             return paidAt >= startOfMonth
         }.reduce(0) { $0 + $1.amount }
     }
@@ -381,6 +383,10 @@ enum BillListFilter: String, CaseIterable, Identifiable {
 struct BillsView: View {
     @StateObject private var viewModel = BillsViewModel()
     @State private var showingNewBill = false
+    @State private var paymentBill: Bill?
+    @State private var cancelledBill: Bill?
+    @State private var paidOn = Date()
+    @State private var savingBill = false
 
     var body: some View {
         ScrollView {
@@ -428,9 +434,9 @@ struct BillsView: View {
                     LazyVStack(spacing: 12) {
                         ForEach(viewModel.filteredBills) { bill in
                             BillCard(bill: bill) {
-                                Task { await viewModel.markPaid(bill) }
+                                paymentBill = bill
                             } onDelete: {
-                                Task { await viewModel.deleteBill(bill) }
+                                cancelledBill = bill
                             }
                         }
                     }
@@ -455,6 +461,27 @@ struct BillsView: View {
         .task {
             await viewModel.loadBills()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .recordsChanged)) { _ in Task { await viewModel.loadBills() } }
+        .sheet(item: $paymentBill) { bill in
+            NavigationStack {
+                Form {
+                    Text(bill.name)
+                    Text(bill.amountFormatted)
+                    DatePicker("Paid on", selection: $paidOn, in: ...Date(), displayedComponents: .date)
+                    Text("Records a payment already made. No money is moved.")
+                    if let error = viewModel.errorMessage { Text(error).foregroundStyle(.red) }
+                    Button("Confirm Payment") { Task {
+                        savingBill = true; defer { savingBill = false }
+                        do { try await BillRepository().action(bill, action: "pay", paidOn: paidOn); paymentBill = nil; await viewModel.loadBills() }
+                        catch { viewModel.errorMessage = RecordError.safe(error).localizedDescription }
+                    } }.disabled(savingBill)
+                }.navigationTitle("Record Bill Payment")
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { paymentBill = nil }.disabled(savingBill) } }
+            }.interactiveDismissDisabled(savingBill)
+        }
+        .confirmationDialog("Cancel this bill?", isPresented: Binding(get: { cancelledBill != nil }, set: { if !$0 { cancelledBill = nil } })) {
+            if let bill = cancelledBill { Button("Cancel Bill", role: .destructive) { Task { await viewModel.deleteBill(bill) } } }
+        } message: { Text("The bill and its history will be preserved.") }
         .sheet(isPresented: $showingNewBill) {
             QuickBillSheet(isPresented: $showingNewBill)
                 .withAppTheme()
@@ -532,7 +559,7 @@ private struct BillCard: View {
 
                 Spacer()
 
-                Text(bill.status.displayName)
+                Text(bill.effectiveStatus.displayName)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.white)
                     .padding(.horizontal, 10)
@@ -541,7 +568,7 @@ private struct BillCard: View {
                     .cornerRadius(8)
             }
 
-            if !bill.isPaid {
+            if !bill.isPaid && bill.status != .cancelled {
                 Button(action: onMarkPaid) {
                     Label("Mark Paid", systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity)
@@ -555,13 +582,13 @@ private struct BillCard: View {
         .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
+                Label("Cancel Bill", systemImage: "xmark.circle")
             }
         }
     }
 
     private var statusColor: Color {
-        switch bill.status {
+        switch bill.effectiveStatus {
         case .paid:
             return .green
         case .overdue:
@@ -612,6 +639,7 @@ struct FilterPill: View {
 // MARK: - Billing Summary Card
 
 struct BillingSummaryCard: View {
+    @EnvironmentObject private var appState: AppState
     let title: String
     let count: Int?
     let total: Double
@@ -639,7 +667,7 @@ struct BillingSummaryCard: View {
                     .font(.system(size: 12))
                     .foregroundColor(.alphaSecondaryText)
 
-                Text(String(format: "$%.2f", total))
+                Text(total, format: .currency(code: appState.currentUser?.reportingCurrency ?? "USD"))
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.alphaPrimaryText)
             }
@@ -666,8 +694,8 @@ struct InvoiceCard: View {
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(.alphaPrimaryText)
 
-                    if let client = invoice.client {
-                        Text(client.name)
+                    if let clientName = invoice.displayClientName {
+                        Text(clientName)
                             .font(.system(size: 14))
                             .foregroundColor(.alphaSecondaryText)
                     }
@@ -734,7 +762,7 @@ struct InvoiceCard: View {
     }
 
     private var statusBadge: some View {
-        Text(invoice.status.displayName)
+        Text(invoice.displayStatus.displayName)
             .font(.system(size: 11, weight: .semibold))
             .foregroundColor(.white)
             .padding(.horizontal, 8)
@@ -744,7 +772,7 @@ struct InvoiceCard: View {
     }
 
     private var statusColor: Color {
-        switch invoice.status {
+        switch invoice.displayStatus {
         case .draft:
             return .gray
         case .sent:
@@ -924,8 +952,10 @@ struct InvoiceDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isUpdating = false
     @State private var errorMessage: String?
-    @State private var showingShareSheet = false
+    private struct PDFDocument: Identifiable { let id = UUID(); let url: URL }
+    @State private var sharedPDF: PDFDocument?
     @State private var pdfURL: URL?
+    @State private var showingPayment = false
 
     private let invoiceRepository = InvoiceRepository()
     private let pdfGenerator = InvoicePDFGenerator()
@@ -959,12 +989,12 @@ struct InvoiceDetailSheet: View {
                                 .foregroundColor(.secondary)
                                 .textCase(.uppercase)
 
-                            if let client = invoice.client {
-                                Text(client.name)
+                            if let clientName = invoice.displayClientName {
+                                Text(clientName)
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundColor(.primary)
 
-                                if let email = client.email {
+                                if let email = invoice.displayClientEmail {
                                     Text(email)
                                         .font(.system(size: 14))
                                         .foregroundColor(.secondary)
@@ -1003,7 +1033,7 @@ struct InvoiceDetailSheet: View {
                     .padding(.horizontal)
 
                     // Line Items Section
-                    if let lineItems = invoice.lineItems, !lineItems.isEmpty {
+                    if let lineItems = invoice.issuedSnapshot?.lines ?? invoice.lineItems, !lineItems.isEmpty {
                         VStack(spacing: 0) {
                             // Header
                             HStack {
@@ -1038,19 +1068,19 @@ struct InvoiceDetailSheet: View {
                                         .font(.system(size: 14))
                                         .foregroundColor(.primary)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .lineLimit(2)
+                                        .fixedSize(horizontal: false, vertical: true)
 
-                                    Text(String(format: "%.0f", item.quantity))
+                                    Text(item.quantity, format: .number.precision(.fractionLength(0...4)))
                                         .font(.system(size: 14))
                                         .foregroundColor(.primary)
                                         .frame(width: 40, alignment: .trailing)
 
-                                    Text(String(format: "$%.2f", item.rate))
+                                    Text(item.rate, format: .currency(code: invoice.currency))
                                         .font(.system(size: 14))
                                         .foregroundColor(.primary)
                                         .frame(width: 70, alignment: .trailing)
 
-                                    Text(String(format: "$%.2f", item.amount))
+                                    Text(item.amount, format: .currency(code: invoice.currency))
                                         .font(.system(size: 14, weight: .medium))
                                         .foregroundColor(.primary)
                                         .frame(width: 80, alignment: .trailing)
@@ -1071,15 +1101,28 @@ struct InvoiceDetailSheet: View {
 
                     // Totals Section
                     VStack(spacing: 12) {
-                        DetailRow(label: "Subtotal", value: String(format: "$%.2f", invoice.subtotal))
+                        DetailRow(label: "Subtotal", value: invoice.subtotal.formatted(.currency(code: invoice.currency)))
 
                         if let taxRate = invoice.taxRate, let taxAmount = invoice.taxAmount {
-                            DetailRow(label: "Tax (\(String(format: "%.1f%%", taxRate)))", value: String(format: "$%.2f", taxAmount))
+                            DetailRow(label: "Tax (\(String(format: "%.1f%%", taxRate)))", value: taxAmount.formatted(.currency(code: invoice.currency)))
                         }
 
                         Divider()
 
                         DetailRow(label: "Total", value: invoice.totalFormatted, isBold: true)
+                        DetailRow(label: "Received", value: invoice.amountPaid.formatted(.currency(code: invoice.currency)))
+                        DetailRow(label: "Balance due", value: invoice.balanceDue.formatted(.currency(code: invoice.currency)))
+                        if invoice.needsLegacyReview { Text("Legacy paid status: no payment evidence recorded. Review before including in cash income.").font(.caption).foregroundStyle(.orange) }
+                        ForEach(invoice.payments ?? []) { payment in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack { Text(payment.paid_on, style: .date); Spacer(); Text(payment.amount, format: .currency(code: invoice.currency)) }
+                                Text(payment.method.replacingOccurrences(of: "_", with: " "))
+                                if let reference = payment.reference, !reference.isEmpty { Text(reference) }
+                                if payment.isReversed {
+                                    Text("Corrected" + (payment.reversal?.first?.reason.map { ": \($0)" } ?? "")).foregroundStyle(.secondary)
+                                }
+                            }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                        }
 
                         if let notes = invoice.notes, !notes.isEmpty {
                             Divider()
@@ -1099,13 +1142,15 @@ struct InvoiceDetailSheet: View {
                     .cornerRadius(12)
                     .padding(.horizontal)
 
+                    InvoiceRecordActions(invoice: invoice, onSaved: { onUpdate(); dismiss() })
+
                     // Action Buttons
                     VStack(spacing: 12) {
                         if invoice.status == .draft {
                             Button(action: { Task { await sendInvoice() } }) {
                                 HStack {
                                     Image(systemName: "paperplane.fill")
-                                    Text("Send Invoice")
+                                    Text("Issue Invoice")
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding()
@@ -1116,10 +1161,10 @@ struct InvoiceDetailSheet: View {
                         }
 
                         if invoice.status == .sent || invoice.status == .overdue {
-                            Button(action: { Task { await markAsPaid() } }) {
+                            Button(action: { showingPayment = true }) {
                                 HStack {
                                     Image(systemName: "checkmark.circle.fill")
-                                    Text("Mark as Paid")
+                                    Text("Record Payment")
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding()
@@ -1129,7 +1174,7 @@ struct InvoiceDetailSheet: View {
                             }
                         }
 
-                        if invoice.status == .paid, let paidAt = invoice.paidAt {
+                        if invoice.status == .paid, let paidAt = invoice.lastPaymentDate {
                             HStack {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
@@ -1185,11 +1230,11 @@ struct InvoiceDetailSheet: View {
                     ProgressView()
                 }
             }
-            .sheet(isPresented: $showingShareSheet) {
-                if let url = pdfURL {
-                    ShareSheet(activityItems: [url])
-                        .withAppTheme()
-                }
+            .sheet(isPresented: $showingPayment) {
+                QuickPaymentSheet(isPresented: $showingPayment, initialInvoice: invoice, onSave: { onUpdate(); dismiss() })
+            }
+            .sheet(item: $sharedPDF, onDismiss: { if let pdfURL { try? FileManager.default.removeItem(at: pdfURL.deletingLastPathComponent()) }; pdfURL = nil }) { document in
+                ShareSheet(activityItems: [document.url]).withAppTheme()
             }
         }
     }
@@ -1207,11 +1252,11 @@ struct InvoiceDetailSheet: View {
         }
 
         pdfURL = url
-        showingShareSheet = true
+        sharedPDF = PDFDocument(url: url)
     }
 
     private var statusBadge: some View {
-        Text(invoice.status.displayName)
+        Text(invoice.displayStatus.displayName)
             .font(.system(size: 14, weight: .semibold))
             .foregroundColor(.white)
             .padding(.horizontal, 12)
@@ -1221,7 +1266,7 @@ struct InvoiceDetailSheet: View {
     }
 
     private var statusColor: Color {
-        switch invoice.status {
+        switch invoice.displayStatus {
         case .draft: return .gray
         case .sent: return .blue
         case .paid: return .green
@@ -1235,11 +1280,11 @@ struct InvoiceDetailSheet: View {
         errorMessage = nil
 
         do {
-            _ = try await invoiceRepository.sendInvoice(id: invoice.id)
+            try await invoiceRepository.action(invoice, "issue")
             onUpdate()
             dismiss()
         } catch {
-            errorMessage = "Failed to send invoice: \(error.localizedDescription)"
+            errorMessage = "Failed to send invoice: \(RecordError.safe(error).localizedDescription)"
         }
 
         isUpdating = false
@@ -1254,7 +1299,7 @@ struct InvoiceDetailSheet: View {
             onUpdate()
             dismiss()
         } catch {
-            errorMessage = "Failed to update invoice: \(error.localizedDescription)"
+            errorMessage = "Failed to update invoice: \(RecordError.safe(error).localizedDescription)"
         }
 
         isUpdating = false

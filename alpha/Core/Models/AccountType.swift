@@ -119,6 +119,10 @@ extension AccountType {
                 .processRefunds,
                 .quickBill,
                 .viewAccountsReceivable,
+                .viewAccountsPayable,
+                .manageBills,
+                .manageVendors,
+                .createPurchaseOrders,
 
                 // Client Management
                 .manageClients,

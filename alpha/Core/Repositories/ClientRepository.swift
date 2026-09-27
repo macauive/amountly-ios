@@ -17,6 +17,7 @@ class ClientRepository {
         var query = supabase
             .from("clients")
             .select("*")
+            .is("archived_at", value: nil)
 
         if let organizationId = scope.organizationId {
             query = query.eq("organization_id", value: organizationId)
@@ -28,12 +29,13 @@ class ClientRepository {
             query = query.eq("is_active", value: true)
         }
 
-        let response = try await query
-            .order("name")
-            .execute()
-
-        let clients: [Contact] = try JSONDecoder().decode([Contact].self, from: response.data)
-        return clients
+        var rows: [Contact] = []
+        while true {
+            let response = try await query.order("name").order("id").range(from: rows.count, to: rows.count + 199).execute()
+            let batch = try RecordCoding.decoder().decode([Contact].self, from: response.data)
+            rows += batch
+            if batch.count < 200 { return rows }
+        }
     }
 
     func fetchClient(id: String) async throws -> Contact {
@@ -44,7 +46,7 @@ class ClientRepository {
             .single()
             .execute()
 
-        let client: Contact = try JSONDecoder().decode(Contact.self, from: response.data)
+        let client: Contact = try RecordCoding.decoder().decode(Contact.self, from: response.data)
         return client
     }
 
@@ -83,7 +85,7 @@ class ClientRepository {
             .single()
             .execute()
 
-        let client: Contact = try JSONDecoder().decode(Contact.self, from: response.data)
+        let client: Contact = try RecordCoding.decoder().decode(Contact.self, from: response.data)
         return client
     }
 
@@ -124,14 +126,14 @@ class ClientRepository {
             .single()
             .execute()
 
-        let client: Contact = try JSONDecoder().decode(Contact.self, from: response.data)
+        let client: Contact = try RecordCoding.decoder().decode(Contact.self, from: response.data)
         return client
     }
 
     func deleteClient(id: String) async throws {
         try await supabase
             .from("clients")
-            .delete()
+            .update(["archived_at": Date().iso8601String])
             .eq("id", value: id)
             .execute()
     }

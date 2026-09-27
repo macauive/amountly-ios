@@ -18,6 +18,7 @@ struct MainTabView: View {
     @State private var showingQuickPayment = false
     @State private var showingCreateProject = false
     @State private var showingAddExpense = false
+    @State private var showingTaxPrep = false
 
     init() {
         // Configure tab bar appearance
@@ -141,6 +142,7 @@ struct MainTabView: View {
             ProjectFormSheet(isPresented: $showingCreateProject, onSave: {})
                 .withAppTheme()
         }
+        .sheet(isPresented: $showingTaxPrep) { NavigationStack { WorkspaceReportView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingTaxPrep = false } } } } }
         .sheet(isPresented: $showingAddExpense) {
             ExpenseFormSheet(isPresented: $showingAddExpense, onSave: {})
                 .withAppTheme()
@@ -183,7 +185,7 @@ struct MainTabView: View {
         case .projects:
             selectedTab = MainTab.projects.rawValue
         case .taxPrep:
-            selectedTab = MainTab.more.rawValue
+            showingTaxPrep = true
         }
     }
 
@@ -296,7 +298,7 @@ private struct MoneyView: View {
                     case .invoices:
                         BillingView(showSectionPicker: false, embeddedInParentNavigation: true)
                     case .bills:
-                        BillsView()
+                        if appState.hasCapability(.viewAccountsPayable) { VendorBillsView() } else { BillsView() }
                     case .expenses:
                         ExpenseViewContent()
                     }
@@ -347,6 +349,7 @@ private struct MoreView: View {
                 }
 
                 Section("Core") {
+                    NavigationLink("Review Inbox", destination: ReviewInboxView())
                     if appState.hasCapability(.viewClients) {
                         NavigationLink(destination: ContactsListView()) {
                             Label("Clients", systemImage: "person.2.fill")

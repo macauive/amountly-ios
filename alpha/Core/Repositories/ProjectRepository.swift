@@ -21,6 +21,7 @@ class ProjectRepository {
                 client:clients(*)
             """)
             .eq("is_active", value: true)
+            .is("archived_at", value: nil)
 
         if let organizationId = scope.organizationId {
             query = query.eq("organization_id", value: organizationId)
@@ -28,12 +29,13 @@ class ProjectRepository {
             query = query.eq("user_id", value: scope.userId)
         }
 
-        let response = try await query
-            .order("name")
-            .execute()
-
-        let projects: [Project] = try JSONDecoder().decode([Project].self, from: response.data)
-        return projects
+        var rows: [Project] = []
+        while true {
+            let response = try await query.order("name").order("id").range(from: rows.count, to: rows.count + 199).execute()
+            let batch = try RecordCoding.decoder().decode([Project].self, from: response.data)
+            rows += batch
+            if batch.count < 200 { return rows }
+        }
     }
 
     func fetchProject(id: String) async throws -> Project {
@@ -48,7 +50,7 @@ class ProjectRepository {
             .single()
             .execute()
 
-        let project: Project = try JSONDecoder().decode(Project.self, from: response.data)
+        let project: Project = try RecordCoding.decoder().decode(Project.self, from: response.data)
         return project
     }
 
@@ -72,14 +74,14 @@ class ProjectRepository {
             .single()
             .execute()
 
-        let project: Project = try JSONDecoder().decode(Project.self, from: response.data)
+        let project: Project = try RecordCoding.decoder().decode(Project.self, from: response.data)
         return project
     }
 
     func deleteProject(id: String) async throws {
         try await supabase
             .from("projects")
-            .delete()
+            .update(["archived_at": Date().iso8601String])
             .eq("id", value: id)
             .execute()
     }
@@ -95,7 +97,7 @@ class ProjectRepository {
             .single()
             .execute()
 
-        let project: Project = try JSONDecoder().decode(Project.self, from: response.data)
+        let project: Project = try RecordCoding.decoder().decode(Project.self, from: response.data)
         return project
     }
 
@@ -128,7 +130,7 @@ class ProjectRepository {
             .single()
             .execute()
 
-        let project: Project = try JSONDecoder().decode(Project.self, from: response.data)
+        let project: Project = try RecordCoding.decoder().decode(Project.self, from: response.data)
         return project
     }
 
@@ -163,7 +165,7 @@ class ProjectRepository {
             .single()
             .execute()
 
-        let project: Project = try JSONDecoder().decode(Project.self, from: response.data)
+        let project: Project = try RecordCoding.decoder().decode(Project.self, from: response.data)
         return project
     }
 }

@@ -17,15 +17,16 @@ class TimeEntryRepository {
         endDate: Date? = nil,
         projectId: String? = nil
     ) async throws -> [TimeEntry] {
-        let scope = try await ownershipResolver.currentScope()
+        _ = try await ownershipResolver.currentScope()
         var query = supabase
             .from("time_entries")
             .select("""
                 *,
                 project:projects(*),
-                task:tasks(id, name, rate)
+                task:tasks(*),
+                billing_links:invoice_time_links(invoice_id,released_at)
             """)
-            .eq("user_id", value: scope.userId)
+
 
         // Apply filters first
         if let startDate = startDate {
@@ -40,13 +41,15 @@ class TimeEntryRepository {
             query = query.eq("project_id", value: projectId)
         }
 
-        // Then apply order and execute
-        let response = try await query
-            .order("start_at", ascending: false)
-            .execute()
-
-        let entries: [TimeEntry] = try JSONDecoder().decode([TimeEntry].self, from: response.data)
-        return entries
+        var rows: [TimeEntry] = []
+        while true {
+            let response = try await query.order("start_at", ascending: false).order("id").range(from: rows.count, to: rows.count + 199).execute()
+            var batch = try RecordCoding.decoder().decode([TimeEntry].self, from: response.data)
+            let raw = try JSONSerialization.jsonObject(with: response.data) as? [[String: Any]] ?? []
+            for index in batch.indices { batch[index].version = raw[index]["updated_at"] as? String }
+            rows += batch
+            if batch.count < 200 { return rows }
+        }
     }
 
     func createTimeEntry(
@@ -78,7 +81,7 @@ class TimeEntryRepository {
             .single()
             .execute()
 
-        let entry: TimeEntry = try JSONDecoder().decode(TimeEntry.self, from: response.data)
+        let entry: TimeEntry = try RecordCoding.decoder().decode(TimeEntry.self, from: response.data)
         return entry
     }
 
@@ -90,54 +93,11 @@ class TimeEntryRepository {
             .execute()
     }
 
-    func fetchUnbilledTimeEntries(
-        projectId: String? = nil,
-        startDate: Date? = nil,
-        endDate: Date? = nil
-    ) async throws -> [TimeEntry] {
-        let scope = try await ownershipResolver.currentScope()
-        var query = supabase
-            .from("time_entries")
-            .select("""
-                *,
-                project:projects(*),
-                task:tasks(id, name, rate)
-            """)
-            .eq("status", value: "APPROVED")
-            .eq("user_id", value: scope.userId)
-            .is("invoice_id", value: nil)
-
-        if let projectId = projectId {
-            query = query.eq("project_id", value: projectId)
+    func fetchUnbilledTimeEntries(projectId: String? = nil, startDate: Date? = nil, endDate: Date? = nil) async throws -> [TimeEntry] {
+        let actor = try await AuthService.shared.getCurrentUser()
+        return try await fetchTimeEntries(startDate: startDate, endDate: endDate, projectId: projectId).filter {
+            FinancialRules.canInvoiceTime(status: $0.status.rawValue, freelancer: actor.accountType == .freelancer, isOwner: $0.userId == actor.id, reserved: $0.isReserved, hasProject: $0.projectId != nil)
         }
-
-        if let startDate = startDate {
-            query = query.gte("start_at", value: startDate.iso8601String)
-        }
-
-        if let endDate = endDate {
-            query = query.lte("start_at", value: endDate.iso8601String)
-        }
-
-        let response = try await query
-            .order("start_at", ascending: false)
-            .execute()
-
-        let entries: [TimeEntry] = try JSONDecoder().decode([TimeEntry].self, from: response.data)
-        return entries
-    }
-
-    func markAsInvoiced(ids: [String], invoiceId: String) async throws {
-        let update = TimeEntryInvoiceUpdate(
-            status: "INVOICED",
-            invoiceId: invoiceId
-        )
-
-        try await supabase
-            .from("time_entries")
-            .update(update)
-            .in("id", values: ids)
-            .execute()
     }
 
     func updateTimeEntry(
@@ -168,7 +128,7 @@ class TimeEntryRepository {
             .single()
             .execute()
 
-        let entry: TimeEntry = try JSONDecoder().decode(TimeEntry.self, from: response.data)
+        let entry: TimeEntry = try RecordCoding.decoder().decode(TimeEntry.self, from: response.data)
         return entry
     }
 }

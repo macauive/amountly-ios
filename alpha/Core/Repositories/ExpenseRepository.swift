@@ -1,177 +1,64 @@
-//
-//  ExpenseRepository.swift
-//  alpha
-//
-//  Created by Claude Code on 2/1/26.
-//
-
 import Foundation
 import Supabase
 
 class ExpenseRepository {
     private let supabase = SupabaseClientManager.shared.client
-    private let ownershipResolver = OwnershipResolver()
-
+    private func decode(_ data: Data) throws -> [Expense] {
+        var rows = try RecordCoding.decoder().decode([Expense].self, from: data)
+        let raw = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+        for index in rows.indices { rows[index].version = raw[index]["updated_at"] as? String }
+        return rows
+    }
     func fetchExpenses() async throws -> [Expense] {
-        let scope = try await ownershipResolver.currentScope()
-        let response = try await supabase
-            .from("expenses")
-            .select("""
-                *,
-                project:projects(*)
-            """)
-            .eq("user_id", value: scope.userId)
-            .order("expense_date", ascending: false)
-            .execute()
-
-        let expenses: [Expense] = try JSONDecoder().decode([Expense].self, from: response.data)
-        return expenses
+        _ = try await OwnershipResolver().currentScope()
+        var rows: [Expense] = []
+        while true {
+            let data = try await supabase.from("expenses").select("*,project:projects(*)").is("archived_at", value: nil)
+                .order("expense_date", ascending: false).order("id").range(from: rows.count, to: rows.count + 199).execute().data
+            let batch = try decode(data); rows += batch
+            if batch.count < 200 { return rows }
+        }
     }
-
     func fetchExpense(id: String) async throws -> Expense {
-        let response = try await supabase
-            .from("expenses")
-            .select("""
-                *,
-                project:projects(*)
-            """)
-            .eq("id", value: id)
-            .single()
-            .execute()
-
-        let expense: Expense = try JSONDecoder().decode(Expense.self, from: response.data)
-        return expense
+        let data = try await supabase.from("expenses").select("*,project:projects(*)").eq("id", value: id).execute().data
+        guard let row = try decode(data).first else { throw RecordError.conflict }; return row
     }
-
-    func createExpense(
-        description: String,
-        amount: Double,
-        currency: String,
-        category: String,
-        merchant: String?,
-        expenseDate: Date,
-        projectId: String?,
-        notes: String?,
-        status: String
-    ) async throws -> Expense {
-        let scope = try await ownershipResolver.currentScope()
-        let insert = ExpenseInsert(
-            userId: scope.userId,
-            description: description,
-            amount: amount,
-            currency: currency,
-            category: category,
-            merchant: merchant,
-            expenseDate: expenseDate.iso8601String,
-            projectId: projectId,
-            notes: notes,
-            status: status
-        )
-
-        let response = try await supabase
-            .from("expenses")
-            .insert(insert)
-            .select()
-            .single()
-            .execute()
-
-        let expense: Expense = try JSONDecoder().decode(Expense.self, from: response.data)
-        return expense
+    private func fields(description: String, amount: Double, currency: String, category: String, merchant: String?, expenseDate: Date, projectId: String?, notes: String?) throws -> [String: AnyJSON] {
+        guard amount.isFinite, amount > 0, amount < 100000000, RecordCoding.money(amount) == amount,
+              RecordCoding.currencies.contains(currency), ExpenseCategory(rawValue: category) != nil,
+              !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, description.count <= 10000 else { throw RecordError.invalid }
+        return ["description": .string(description), "amount": .double(amount), "currency": .string(currency), "category": .string(category), "merchant": merchant.map(AnyJSON.string) ?? .null, "expense_date": .string(RecordCoding.day(expenseDate)), "project_id": projectId.map(AnyJSON.string) ?? .null, "notes": notes.map(AnyJSON.string) ?? .null]
     }
-
-    func updateExpense(
-        id: String,
-        description: String,
-        amount: Double,
-        currency: String,
-        category: String,
-        merchant: String?,
-        expenseDate: Date,
-        projectId: String?,
-        notes: String?,
-        status: String
-    ) async throws -> Expense {
-        let scope = try await ownershipResolver.currentScope()
-        let update = ExpenseInsert(
-            userId: scope.userId,
-            description: description,
-            amount: amount,
-            currency: currency,
-            category: category,
-            merchant: merchant,
-            expenseDate: expenseDate.iso8601String,
-            projectId: projectId,
-            notes: notes,
-            status: status
-        )
-
-        let response = try await supabase
-            .from("expenses")
-            .update(update)
-            .eq("id", value: id)
-            .select()
-            .single()
-            .execute()
-
-        let expense: Expense = try JSONDecoder().decode(Expense.self, from: response.data)
-        return expense
+    func createExpense(description: String, amount: Double, currency: String, category: String, merchant: String?, expenseDate: Date, projectId: String?, notes: String?, status: String, attempt: RecordAttempt = RecordAttempt(), receiptPath: String? = nil) async throws -> Expense {
+        guard status == "DRAFT" else { throw RecordError.invalid }
+        var data = try fields(description: description, amount: amount, currency: currency, category: category, merchant: merchant, expenseDate: expenseDate, projectId: projectId, notes: notes)
+        data["status"] = .string("DRAFT")
+        if let receiptPath { data["receipt_path"] = .string(receiptPath) }
+        try await attempt.perform("create_money_record", params: ["p_kind": .string("expenses"), "p_id": .string(attempt.id), "p_data": .object(data)])
+        return try await fetchExpense(id: attempt.id)
     }
-
-    func updateStatus(id: String, status: String) async throws -> Expense {
-        let update = ExpenseStatusUpdate(status: status)
-
-        let response = try await supabase
-            .from("expenses")
-            .update(update)
-            .eq("id", value: id)
-            .select("""
-                *,
-                project:projects(*)
-            """)
-            .single()
-            .execute()
-
-        let expense: Expense = try JSONDecoder().decode(Expense.self, from: response.data)
-        return expense
+    func updateExpense(id: String, description: String, amount: Double, currency: String, category: String, merchant: String?, expenseDate: Date, projectId: String?, notes: String?, status: String, expectedVersion: String?) async throws -> Expense {
+        guard let expectedVersion else { throw RecordError.conflict }
+        let data = try fields(description: description, amount: amount, currency: currency, category: category, merchant: merchant, expenseDate: expenseDate, projectId: projectId, notes: notes)
+        do {
+            let response = try await supabase.from("expenses").update(data).eq("id", value: id).eq("updated_at", value: expectedVersion).select().single().execute()
+            NotificationCenter.default.post(name: .recordsChanged, object: nil)
+            return try RecordCoding.decoder().decode(Expense.self, from: response.data)
+        } catch { throw RecordError.safe(error) }
     }
-
-    func deleteExpense(id: String) async throws {
-        try await supabase
-            .from("expenses")
-            .delete()
-            .eq("id", value: id)
-            .execute()
+    func updateStatus(id: String, status: String, expectedVersion: String?) async throws -> Expense {
+        guard let action = ["SUBMITTED": "submit", "APPROVED": "approve", "REJECTED": "reject"][status], let expectedVersion else { throw RecordError.conflict }
+        do {
+            try await supabase.rpc("review_work_record", params: ["p_kind": "expenses", "p_id": id, "p_action": action, "p_expected_updated_at": expectedVersion]).execute()
+            NotificationCenter.default.post(name: .recordsChanged, object: nil)
+            return try await fetchExpense(id: id)
+        } catch { throw RecordError.safe(error) }
     }
-}
-
-// MARK: - Insert DTOs
-
-struct ExpenseInsert: Codable {
-    let userId: String
-    let description: String
-    let amount: Double
-    let currency: String
-    let category: String
-    let merchant: String?
-    let expenseDate: String
-    let projectId: String?
-    let notes: String?
-    let status: String
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case description
-        case amount
-        case currency
-        case category
-        case merchant
-        case expenseDate = "expense_date"
-        case projectId = "project_id"
-        case notes
-        case status
+    func deleteExpense(id: String, expectedVersion: String?) async throws {
+        guard let expectedVersion else { throw RecordError.conflict }
+        do {
+            try await supabase.from("expenses").update(["archived_at": Date().iso8601String]).eq("id", value: id).eq("updated_at", value: expectedVersion).select("id").single().execute()
+            NotificationCenter.default.post(name: .recordsChanged, object: nil)
+        } catch { throw RecordError.safe(error) }
     }
-}
-
-struct ExpenseStatusUpdate: Codable {
-    let status: String
 }
