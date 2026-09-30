@@ -7,6 +7,7 @@ p.add_argument('--fixtures', required=True)
 p.add_argument('--products', default='/tmp/amountly-ios-build/Build/Products')
 p.add_argument('--device',required=True)
 p.add_argument('--only')
+p.add_argument('--inspect-ai-forms', action='store_true')
 a=p.parse_args()
 f=json.loads(Path(a.fixtures).read_text())
 if f.get('url') != 'http://127.0.0.1:54321': raise SystemExit('Refusing non-local fixture configuration')
@@ -14,6 +15,9 @@ products=Path(a.products).resolve()
 source=next(x for x in products.glob('AmountlyIntegration_*.xctestrun') if not x.name.endswith('-local.xctestrun'))
 config=plistlib.loads(source.read_bytes())
 env={'AMOUNTLY_LOCAL_TESTING':'1','AMOUNTLY_XCTEST':'1','AMOUNTLY_LOCAL_URL':'http://127.0.0.1:54331','AMOUNTLY_LOCAL_ANON_KEY':f['anonKey'],'AMOUNTLY_TEST_FIXTURES':json.dumps(f,separators=(',',':'))}
+if a.inspect_ai_forms:
+ env['AMOUNTLY_AI_FORM_INSPECTION']='1'
+ a.only='AmountlyIntegrationTests/AIFormWorkflowTests'
 for name,target in config.items():
  if name.startswith('__'): continue
  target.setdefault('EnvironmentVariables',{}).update(env)

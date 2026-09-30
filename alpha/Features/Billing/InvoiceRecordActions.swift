@@ -110,6 +110,7 @@ private struct InvoiceDraftEditor: View {
     @State private var due = Date()
     @State private var tax = 0.0
     @State private var notes = ""
+    @State private var lineCaptureText = ""
     @State private var busy = false
     @State private var error: String?
     var body: some View {
@@ -118,6 +119,9 @@ private struct InvoiceDraftEditor: View {
                 TextField("Invoice number", text: $number)
                 DatePicker("Due date", selection: $due, displayedComponents: .date)
                 TextField("Tax %", value: $tax, format: .number).keyboardType(.decimalPad)
+                AICaptureSection<AILine>(title: "Smart invoice line", text: $lineCaptureText, task: .line) { result in
+                    if lines.count < 100 { lines.append(LineItem(description: result.description, quantity: result.quantity, rate: result.rate)) }
+                }.disabled(lines.count >= 100)
                 Section("Line items") {
                     ForEach($lines) { $line in
                         VStack { TextField("Description", text: $line.description); HStack { TextField("Quantity", value: $line.quantity, format: .number); TextField("Rate", value: $line.rate, format: .number) }.keyboardType(.decimalPad) }

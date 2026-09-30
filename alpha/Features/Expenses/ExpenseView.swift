@@ -472,7 +472,7 @@ struct ExpenseFormSheet: View {
     @State private var selectedProjectId: String?
     @State private var notes = ""
     @State private var smartCaptureText = ""
-    @State private var smartCaptureSummary: String?
+    @State private var receiptText = ""
 
     @State private var projects: [Project] = []
     @State private var isLoadingProjects = false
@@ -536,53 +536,10 @@ struct ExpenseFormSheet: View {
                     }
                 }
 
-                if !isEditing {
-                    Section {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: "wand.and.stars")
-                                    .font(.system(size: 17, weight: .semibold))
-                                    .foregroundColor(.alphaPrimary)
-                                    .frame(width: 32, height: 32)
-                                    .background(Color.alphaPrimary.opacity(0.1))
-                                    .cornerRadius(8)
-
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("Smart capture")
-                                        .font(.alphaBodyMedium)
-                                        .foregroundColor(.alphaPrimaryText)
-
-                                    Text("Paste a receipt line or describe the expense and Amountly will fill what it can.")
-                                        .font(.alphaBodySmall)
-                                        .foregroundColor(.alphaSecondaryText)
-                                }
-                            }
-
-                            TextEditor(text: $smartCaptureText)
-                                .frame(minHeight: 76)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.alphaBorder.opacity(0.5), lineWidth: 1)
-                                )
-                                .accessibilityLabel("Smart expense text")
-
-                            HStack(alignment: .top, spacing: 12) {
-                                Text(smartCaptureSummary ?? "Amountly looks for amount, merchant, date, and category signals.")
-                                    .font(.alphaCaption)
-                                    .foregroundColor(.alphaSecondaryText)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                                Button {
-                                    fillFromSmartCapture()
-                                } label: {
-                                    Label("Extract details", systemImage: "wand.and.stars")
-                                }
-                                .font(.alphaCaption)
-                                .disabled(smartCaptureText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
+                AICaptureSection<AIExpense>(title: "Smart expense capture", text: $smartCaptureText, task: .expense, apply: applyExpense)
+                AICaptureSection<AIReceipt>(title: "Receipt/document extraction", text: $receiptText, task: .receipt) { result in
+                    applyExpense(result.expense)
+                    if !result.notes.isEmpty { notes = result.notes }
                 }
 
                 // Description
@@ -682,49 +639,18 @@ struct ExpenseFormSheet: View {
                 do { receiptURL = try result.get() } catch { errorMessage = "Could not select the receipt." }
             }
             .sheet(isPresented: $showingScanner) {
-                ReceiptScannerView(onScanComplete: { scannedData in
-                    applyScannedData(scannedData)
-                })
+                ReceiptScannerView(onScanComplete: { receiptText = $0 }, onError: { errorMessage = $0 })
                 .withAppTheme()
             }
         }
     }
 
-    private func fillFromSmartCapture() {
-        let result = ExpenseCaptureParser.capture(from: smartCaptureText)
-
-        if let capturedAmount = result.amount, amount.isEmpty {
-            amount = String(format: "%.2f", capturedAmount)
-        }
-        if let capturedMerchant = result.merchant, merchant.isEmpty {
-            merchant = capturedMerchant
-        }
-        if let capturedDescription = result.description, description.isEmpty {
-            description = capturedDescription
-        }
-        if let capturedDate = result.date {
-            expenseDate = capturedDate
-        }
-        category = result.category
-        smartCaptureSummary = result.reason
-    }
-
-    private func applyScannedData(_ data: ScannedReceiptData) {
-        if let scannedMerchant = data.merchant {
-            merchant = scannedMerchant
-        }
-        if let scannedAmount = data.amount {
-            amount = String(format: "%.2f", scannedAmount)
-        }
-        if let scannedDate = data.date {
-            expenseDate = scannedDate
-        }
-        if let scannedCategory = data.category {
-            category = scannedCategory
-        }
-        if !data.items.isEmpty {
-            description = data.items.first ?? ""
-        }
+    private func applyExpense(_ result: AIExpense) {
+        if !result.amount.isEmpty { amount = result.amount }
+        if !result.merchant.isEmpty { merchant = result.merchant }
+        if !result.description.isEmpty { description = result.description }
+        if let date = AIValidation.date(result.expense_date) { expenseDate = date }
+        category = ExpenseCategory(rawValue: result.category.rawValue) ?? .other
     }
 
     private func loadProjects() async {
@@ -784,235 +710,6 @@ struct ExpenseFormSheet: View {
         }
 
         isSaving = false
-    }
-}
-
-private struct ExpenseCaptureResult {
-    var amount: Double?
-    var merchant: String?
-    var description: String?
-    var date: Date?
-    var category: ExpenseCategory
-    var reason: String
-}
-
-private enum ExpenseCaptureParser {
-    nonisolated static func capture(from text: String, referenceDate: Date = Date()) -> ExpenseCaptureResult {
-        let amount = parseAmount(from: text)
-        let date = parseDate(from: text, referenceDate: referenceDate)
-        let merchant = parseMerchant(from: text)
-        let category = parseCategory(from: text)
-        let description = parseDescription(from: text, merchant: merchant)
-        let filled = [
-            amount == nil ? nil : "amount",
-            merchant == nil ? nil : "merchant",
-            date == nil ? nil : "date",
-            "category"
-        ].compactMap { $0 }.joined(separator: ", ")
-
-        return ExpenseCaptureResult(
-            amount: amount,
-            merchant: merchant,
-            description: description,
-            date: date,
-            category: category,
-            reason: "Filled \(filled)."
-        )
-    }
-
-    nonisolated private static func parseAmount(from text: String) -> Double? {
-        let patterns = [
-            #"\$\s*(\d{1,6}(?:[,.]\d{2})?)\b"#,
-            #"\btotal\s*:?\s*\$?\s*(\d{1,6}(?:[,.]\d{2})?)\b"#,
-            #"\b(\d{1,6}[,.]\d{2})\b"#
-        ]
-
-        for pattern in patterns {
-            if let match = firstMatch(in: text, pattern: pattern, options: [.caseInsensitive]),
-               let value = Double(match.replacingOccurrences(of: ",", with: "")) {
-                return value
-            }
-        }
-
-        return nil
-    }
-
-    nonisolated private static func parseMerchant(from text: String) -> String? {
-        let lines = text
-            .components(separatedBy: .newlines)
-            .map(cleanLine)
-            .filter { !$0.isEmpty }
-
-        if let labeled = lines.first(where: { $0.range(of: #"^(merchant|vendor|store)\s*:"#, options: [.regularExpression, .caseInsensitive]) != nil }) {
-            return titleCase(cleanLine(labeled.replacingOccurrences(of: #"^(merchant|vendor|store)\s*:\s*"#, with: "", options: [.regularExpression, .caseInsensitive])))
-        }
-
-        if let beforeAmount = firstMatch(in: text, pattern: #"^\s*([A-Za-z][A-Za-z0-9&'. -]{1,40}?)\s+\$?\d"#, options: [.caseInsensitive]) {
-            return titleCase(cleanLine(beforeAmount))
-        }
-
-        return lines.first.map(titleCase)
-    }
-
-    nonisolated private static func parseDate(from text: String, referenceDate: Date) -> Date? {
-        let calendar = Calendar.current
-        let normalized = text.lowercased()
-
-        if normalized.contains("today") {
-            return referenceDate
-        }
-        if normalized.contains("yesterday") {
-            return calendar.date(byAdding: .day, value: -1, to: referenceDate)
-        }
-
-        if let components = firstDateComponents(
-            in: text,
-            pattern: #"\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b"#,
-            order: [.year, .month, .day]
-        ) {
-            return calendar.date(from: components)
-        }
-
-        if let components = firstDateComponents(
-            in: text,
-            pattern: #"\b(0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])(?:[-/](20\d{2}))?\b"#,
-            order: [.month, .day, .year]
-        ) {
-            var resolved = components
-            if resolved.year == nil {
-                resolved.year = calendar.component(.year, from: referenceDate)
-            }
-            return calendar.date(from: resolved)
-        }
-
-        return nil
-    }
-
-    nonisolated private static func parseCategory(from text: String) -> ExpenseCategory {
-        let normalized = text.lowercased()
-
-        if contains(normalized, anyOf: ["flight", "airline", "hotel", "uber", "lyft", "taxi", "mileage", "parking", "train"]) {
-            return .travel
-        }
-        if contains(normalized, anyOf: ["coffee", "lunch", "dinner", "restaurant", "starbucks", "meal", "catering"]) {
-            return .meals
-        }
-        if contains(normalized, anyOf: ["software", "subscription", "saas", "github", "notion", "figma", "openai", "cloud"]) {
-            return .software
-        }
-        if contains(normalized, anyOf: ["laptop", "monitor", "keyboard", "hardware", "device", "printer"]) {
-            return .hardware
-        }
-        if contains(normalized, anyOf: ["ad", "ads", "marketing", "campaign", "sponsorship", "design"]) {
-            return .marketing
-        }
-        if contains(normalized, anyOf: ["electric", "internet", "phone", "utility", "utilities"]) {
-            return .utilities
-        }
-        if contains(normalized, anyOf: ["staples", "office", "supplies", "paper", "pens", "ink"]) {
-            return .officeSupplies
-        }
-
-        return .other
-    }
-
-    nonisolated private static func parseDescription(from text: String, merchant: String?) -> String? {
-        var cleaned = text
-            .replacingOccurrences(of: #"\$?\s*\d{1,6}(?:[,.]\d{2})?\b"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"\b(today|yesterday)\b"#, with: " ", options: [.regularExpression, .caseInsensitive])
-            .replacingOccurrences(of: #"\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"\b(0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])(?:[-/](20\d{2}))?\b"#, with: " ", options: .regularExpression)
-
-        if let merchant {
-            cleaned = cleaned.replacingOccurrences(of: merchant, with: " ", options: [.caseInsensitive])
-        }
-
-        return titleCaseFirst(
-            cleaned
-                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        ).nilIfBlank
-    }
-
-    nonisolated private static func firstDateComponents(
-        in text: String,
-        pattern: String,
-        order: [Calendar.Component]
-    ) -> DateComponents? {
-        guard let groups = captureGroups(in: text, pattern: pattern), groups.count >= 2 else { return nil }
-        var components = DateComponents()
-
-        for (index, component) in order.enumerated() {
-            guard groups.indices.contains(index), let value = Int(groups[index]) else { continue }
-            switch component {
-            case .year:
-                components.year = value
-            case .month:
-                components.month = value
-            case .day:
-                components.day = value
-            default:
-                break
-            }
-        }
-
-        return components.month == nil || components.day == nil ? nil : components
-    }
-
-    nonisolated private static func captureGroups(in text: String, pattern: String) -> [String]? {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
-
-        return (1..<match.numberOfRanges).compactMap { index in
-            guard let groupRange = Range(match.range(at: index), in: text) else { return nil }
-            return String(text[groupRange])
-        }
-    }
-
-    nonisolated private static func firstMatch(
-        in text: String,
-        pattern: String,
-        options: NSRegularExpression.Options = []
-    ) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
-        let captureIndex = match.numberOfRanges > 1 ? 1 : 0
-        guard let matchRange = Range(match.range(at: captureIndex), in: text) else { return nil }
-        return String(text[matchRange])
-    }
-
-    nonisolated private static func contains(_ text: String, anyOf needles: [String]) -> Bool {
-        needles.contains { text.contains($0) }
-    }
-
-    nonisolated private static func cleanLine(_ line: String) -> String {
-        line
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    nonisolated private static func titleCase(_ value: String) -> String {
-        value
-            .split(separator: " ")
-            .map { word in
-                let lowercased = word.lowercased()
-                return lowercased.prefix(1).uppercased() + lowercased.dropFirst()
-            }
-            .joined(separator: " ")
-    }
-
-    nonisolated private static func titleCaseFirst(_ value: String) -> String {
-        guard let first = value.first else { return value }
-        return first.uppercased() + value.dropFirst()
-    }
-}
-
-private extension String {
-    nonisolated var nilIfBlank: String? {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

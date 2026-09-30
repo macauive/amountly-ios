@@ -74,6 +74,7 @@ struct VendorBillForm: View {
     @State private var currency = "USD"
     @State private var notes = ""
     @State private var lines = [LineItem()]
+    @State private var lineCaptureText = ""
     @State private var error: String?
     @State private var saving = false
     @State private var attempted = false
@@ -93,6 +94,13 @@ struct VendorBillForm: View {
                         DatePicker(purchaseOrder ? "Expected date" : "Due date", selection: $due, displayedComponents: .date)
                         Picker("Currency", selection: $currency) { ForEach(RecordCoding.currencies, id: \.self) { Text($0) } }
                         TextField("Tax %", value: $tax, format: .number).keyboardType(.decimalPad)
+                    }
+                    if !purchaseOrder {
+                        AICaptureSection<AILine>(title: "Smart bill line", text: $lineCaptureText, task: .line) { result in
+                            let line = LineItem(description: result.description, quantity: result.quantity, rate: result.rate)
+                            if lines.count == 1 && lines[0].description.isEmpty && lines[0].rate == 0 { lines = [line] }
+                            else if lines.count < 100 { lines.append(line) }
+                        }.disabled(lines.count >= 100)
                     }
                     Section("Line items") {
                         ForEach($lines) { $line in

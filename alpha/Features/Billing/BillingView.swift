@@ -956,6 +956,7 @@ struct InvoiceDetailSheet: View {
     @State private var sharedPDF: PDFDocument?
     @State private var pdfURL: URL?
     @State private var showingPayment = false
+    @State private var showingReminder = false
 
     private let invoiceRepository = InvoiceRepository()
     private let pdfGenerator = InvoicePDFGenerator()
@@ -1187,6 +1188,10 @@ struct InvoiceDetailSheet: View {
                             .cornerRadius(12)
                         }
 
+                        if [.sent, .overdue].contains(invoice.status), invoice.balanceDue > 0 {
+                            Button("Draft Payment Reminder", systemImage: "wand.and.stars") { showingReminder = true }
+                                .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                        }
                         // Download PDF Button
                         Button(action: generateAndSharePDF) {
                             HStack {
@@ -1230,6 +1235,7 @@ struct InvoiceDetailSheet: View {
                     ProgressView()
                 }
             }
+            .sheet(isPresented: $showingReminder) { AIReminderSheet(invoice: invoice) }
             .sheet(isPresented: $showingPayment) {
                 QuickPaymentSheet(isPresented: $showingPayment, initialInvoice: invoice, onSave: { onUpdate(); dismiss() })
             }

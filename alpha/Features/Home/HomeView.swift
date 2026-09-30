@@ -57,6 +57,7 @@ struct HomeView: View {
                                 NavigationLink("Open Review Inbox", destination: ReviewInboxView())
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                         }
+                        DashboardAI(input: aiInput, currency: currency, navigate: onFinancialSearchDestination).id(appState.currentUser?.id)
                         GroupBox("Financial Search") {
                             VStack(alignment: .leading, spacing: 10) {
                                 TextField("Search invoices, expenses, bills…", text: $search).textFieldStyle(.roundedBorder)
@@ -109,13 +110,22 @@ struct HomeView: View {
                 .sheet(isPresented: $showAccount) { AccountSheet(isPresented: $showAccount) }
         }
     }
+    private var aiInput: AIDashboardInput {
+        var routes: [AIRoute] = [.dashboard, .expenses]
+        if appState.hasCapability(.viewInvoices) || appState.hasCapability(.viewAccountsReceivable) { routes.append(.invoices) }
+        if personal || appState.hasCapability(.viewAccountsPayable) { routes.append(.bills) }
+        if appState.hasCapability(.trackTime) { routes.append(.time) }
+        if appState.hasCapability(.viewTaxDashboard) { routes.append(.tax) }
+        return .summary(account: appState.currentUser?.accountType ?? .personal, query: search, currency: currency,
+            invoices: invoices, expenses: expenses, bills: bills, vendorBills: vendorBills, time: time, routes: routes)
+    }
     private func metric(_ title: String, amount: Double, icon: String) -> some View { metric(title, text: amount.formatted(.currency(code: currency)), icon: icon) }
     private func metric(_ title: String, text: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 10) { Label(title, systemImage: icon).font(.caption); Text(text).font(.title2.bold()).minimumScaleFactor(0.6).lineLimit(1) }
             .frame(maxWidth: .infinity, minHeight: 90, alignment: .leading).padding().background(Color.alphaCardBackground, in: RoundedRectangle(cornerRadius: 12))
     }
     private func load() async {
-        loading = true; error = nil; defer { loading = false }
+        loading = true; error = nil; invoices = []; expenses = []; bills = []; vendorBills = []; time = []; defer { loading = false }
         do {
             expenses = try await ExpenseRepository().fetchExpenses()
             if appState.hasCapability(.viewInvoices) || appState.hasCapability(.viewAccountsReceivable) { invoices = try await InvoiceRepository().fetchInvoices() }

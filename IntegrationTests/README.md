@@ -18,7 +18,7 @@ are authoritative; do not use the legacy migrations in this iOS repository.
 
    ```sh
    supabase start --workdir /private/tmp/amountly-ios-validation \
-     -x studio,inbucket,logflare,vector,supavisor,postgres-meta,edge-runtime,realtime,imgproxy
+     -x studio,mailpit,logflare,vector,supavisor,postgres-meta,edge-runtime,realtime,imgproxy
    ```
 
    CLI status/start output contains local credentials; keep it private.
@@ -81,3 +81,92 @@ role and tenant denials, independent approval, personal/vendor bills, purchasing
 time reservation/release, private receipts with real URL expiry, paginated CSV,
 spreadsheet injection, shared preferences, multi-page PDF content, session
 refresh/restoration, disabled profiles, sign-out, and login-form failure/recovery.
+
+
+## AI parity checks (September 30, 2026)
+
+The current AI contract/client regression suite replaces the original heuristic
+parser probes. No backend or API key is needed:
+
+```sh
+swift test --scratch-path /tmp/amountly-ai-rules-build
+python3 scripts/verify-smart-capture.py
+```
+
+App-hosted `AIParityTests` exercise native time-form application, bounded dashboard
+summaries and Vision OCR. Build the `AmountlyIntegration` scheme for the chosen
+simulator, then run:
+
+```sh
+xcodebuild -project alpha.xcodeproj -scheme AmountlyIntegration \
+  -destination 'platform=iOS Simulator,id=SIMULATOR_UUID' \
+  -derivedDataPath /tmp/amountly-ai-verification-build build-for-testing
+python3 scripts/run-ai-tests.py --device SIMULATOR_UUID
+```
+
+`--live` separately opts into eight synthetic requests covering all seven active
+web tasks (two time examples), against the production shared AI service. It
+requires the designated QA login in `AMOUNTLY_AI_QA_EMAIL` and
+`AMOUNTLY_AI_QA_PASSWORD` environment variables. Do not put credentials in command
+arguments, checked-in files, screenshots or chat. The runner writes a temporary
+mode-0600 xctestrun and removes it afterward. The test uses a separate SDK session
+storage key, signs that session out afterward, and never creates financial records
+or sends reminders. The provider calls consume the QA account's AI quota. Do not
+use a personal customer's login as a substitute.
+
+`--inspect-ui` runs a separate, 55-second XCTest-only screen for computer-use
+inspection of the real shared SwiftUI capture component. Its network responses
+are synthetic and intercepted in the test target; no UI-testing bypass or mock
+code is compiled into the app target. The inspection verified Get suggestion →
+reviewed preview → Apply suggestion, including that form values stayed unchanged
+until Apply. This is representative component UI coverage, not an exhaustive tap
+through every financial form.
+
+Physical-device camera capture and device share destinations still need a device
+pass. Synthetic-image Vision OCR is tested in the simulator. Live AI checks prove
+the current shared endpoint works for the supplied cases, not that every possible
+natural-language input is interpreted correctly. All generated fields remain
+editable and require review before saving.
+
+## Precommit follow-up — September 30, 2026
+
+The existing local suite passed again: eight financial-workflow tests, one
+configuration test, and three offline AI tests (12 passed; the opt-in live AI and
+component inspection tests were skipped). Debug/test and unsigned Release builds
+passed after adding an optional SwiftUI environment client for form inspection.
+Only the test target contains mock responses.
+
+The real expense and contact forms were exercised with computer use against a
+fresh disposable stack. Expense capture showed a safe 503 error, recovered on
+explicit retry, kept fields unchanged until Apply, then saved the expected 37.45
+amount, merchant and category. A pending contact request was dismissed; reopening
+showed an empty form. A new suggestion populated company, contact and email, and
+those values were saved and verified through the real repositories.
+
+The invoice form showed a reviewed 2 × 75 = 150 suggestion, preserved its blank
+line before Apply, and updated the editable line/total afterward. Its final Create
+click could not be completed: the computer-use tool repeatedly returned
+`noWindowsAvailable` for coordinate clicks, while accessibility reads/actions
+still worked. The invoice was dismissed without saving. Consequently the opt-in
+form inspection test **failed its missing-invoice assertion**; it is not a full
+end-to-end pass. Expense/contact persistence assertions passed before that
+failure. Repeat the invoice UI save check before calling this form pass complete.
+
+To reproduce the opt-in form pass after building, with the proxy running and
+fresh local fixtures:
+
+```sh
+python3 scripts/run-integration-tests.py --inspect-ai-forms \
+  --fixtures /private/tmp/amountly-ios-fixtures.json \
+  --products /tmp/amountly-ai-verification-build/Build/Products \
+  --device SIMULATOR_UUID
+```
+
+The screen waits up to 15 minutes for computer-use/manual actions. Use Fail once
+for the expense form, request twice, apply and save. Use Slow for the contact form,
+request then dismiss while generating. Switch to Success, reopen contact, request,
+apply and save. Finally create an invoice for AI Form Verification Studio using
+the suggested line, then tap Finish verification. The XCTest checks the three
+saved records and failure/cancellation counters. These are local synthetic writes
+only; the opt-in run never calls the hosted AI endpoint. Physical camera capture
+and device share destinations remain outside simulator coverage.

@@ -15,52 +15,13 @@ struct QuickEntrySheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: "wand.and.stars")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundColor(.alphaPrimary)
-                                .frame(width: 32, height: 32)
-                                .background(Color.alphaPrimary.opacity(0.1))
-                                .cornerRadius(8)
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("Smart time capture")
-                                    .font(.alphaBodyMedium)
-                                    .foregroundColor(.alphaPrimaryText)
-
-                                Text("Describe the work and Amountly will fill the time entry.")
-                                    .font(.alphaBodySmall)
-                                    .foregroundColor(.alphaSecondaryText)
-                            }
-                        }
-
-                        TextEditor(text: $viewModel.smartTimeText)
-                            .frame(minHeight: 96)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.alphaBorder.opacity(0.5), lineWidth: 1)
-                            )
-                            .disabled(viewModel.isSaving)
-                            .accessibilityLabel("Smart time text")
-
-                        HStack(alignment: .top, spacing: 12) {
-                            Text(viewModel.smartTimeSummary ?? "Amountly looks for work notes, dates, durations, and time ranges.")
-                                .font(.alphaCaption)
-                                .foregroundColor(.alphaSecondaryText)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                            Button {
-                                viewModel.fillFromSmartTime()
-                            } label: {
-                                Label("Fill time entry", systemImage: "wand.and.stars")
-                            }
-                            .font(.alphaCaption)
-                            .disabled(viewModel.smartTimeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isSaving)
-                        }
+                AICaptureSection<AITime>(title: "Smart time capture", text: $viewModel.smartTimeText, task: .time, apply: viewModel.applySmartTime)
+                    .disabled(viewModel.isSaving)
+                if let interval = viewModel.suggestedInterval {
+                    Section("Suggested time block") {
+                        Text("\(interval.start.formatted(date: .abbreviated, time: .shortened)) – \(interval.end.formatted(date: .abbreviated, time: .shortened))")
+                        Text("Changing the date or duration uses a new estimated time block.").font(.caption)
                     }
-                    .padding(.vertical, 4)
                 }
 
                 // Project Selection
@@ -137,7 +98,7 @@ struct QuickEntrySheet: View {
                 Section {
                     HStack {
                         Picker("Hours", selection: $viewModel.durationHours) {
-                            ForEach(0..<13) { hour in
+                            ForEach(0..<25) { hour in
                                 Text("\(hour)h").tag(hour)
                             }
                         }
@@ -145,7 +106,7 @@ struct QuickEntrySheet: View {
                         .frame(maxWidth: .infinity)
 
                         Picker("Minutes", selection: $viewModel.durationMinutes) {
-                            ForEach([0, 15, 30, 45], id: \.self) { minute in
+                            ForEach(Array(0..<60), id: \.self) { minute in
                                 Text("\(minute)m").tag(minute)
                             }
                         }

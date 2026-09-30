@@ -21,6 +21,7 @@ struct CreateInvoiceSheet: View {
     @State private var currency = "USD"
     @State private var taxRate = 0.0
     @State private var notes = ""
+    @State private var lineCaptureText = ""
     @State private var showingNewContact = false
     @State private var showingTimeEntries = false
     @State private var selectedTimeEntries: [TimeEntry] = []
@@ -140,6 +141,12 @@ struct CreateInvoiceSheet: View {
                         .foregroundColor(.primary)
                         .textCase(nil)
                 }
+
+                AICaptureSection<AILine>(title: "Smart invoice line", text: $lineCaptureText, task: .line) { result in
+                    let line = LineItem(description: result.description, quantity: result.quantity, rate: result.rate)
+                    if lineItems.count == 1 && lineItems[0].description.isEmpty && lineItems[0].rate == 0 { lineItems = [line] }
+                    else if lineItems.count < 100 { lineItems.append(line) }
+                }.disabled(!selectedTimeEntries.isEmpty || lineItems.count >= 100)
 
                 Section {
                     ForEach($lineItems) { $item in

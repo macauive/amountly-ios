@@ -19,7 +19,7 @@ class QuickEntryViewModel: ObservableObject {
     @Published var durationMinutes: Int = 0
     @Published var notes: String = ""
     @Published var smartTimeText = ""
-    @Published var smartTimeSummary: String?
+    private var capturedInterval: (start: Date, end: Date, day: Date, minutes: Int)?
     @Published var isLoading = false
     @Published var isSaving = false
     @Published var errorMessage: String?
@@ -30,7 +30,7 @@ class QuickEntryViewModel: ObservableObject {
     // MARK: - Computed Properties
 
     var canSave: Bool {
-        selectedProject != nil && totalDurationMinutes > 0
+        selectedProject != nil && (1...1440).contains(totalDurationMinutes)
     }
 
     var totalDurationMinutes: Int {
@@ -80,19 +80,21 @@ class QuickEntryViewModel: ObservableObject {
         }
     }
 
-    func fillFromSmartTime() {
-        let result = TimeCaptureParser.capture(from: smartTimeText)
-        let roundedMinutes = nearestQuarterHour(result.durationMinutes)
-
-        date = result.date
-        durationHours = min(12, roundedMinutes / 60)
-        durationMinutes = roundedMinutes % 60
-
-        if notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            notes = result.notes
-        }
-
-        smartTimeSummary = result.reason
+    var suggestedInterval: (start: Date, end: Date)? {
+        guard let capturedInterval, capturedInterval.minutes == totalDurationMinutes,
+              Calendar.current.isDate(capturedInterval.day, inSameDayAs: date) else { return nil }
+        return (capturedInterval.start, capturedInterval.end)
+    }
+    func applySmartTime(_ result: AITime) {
+        if let day = AIValidation.date(result.date) { date = day }
+        durationHours = result.minutes / 60
+        durationMinutes = result.minutes % 60
+        if !result.notes.isEmpty { notes = result.notes }
+        if let (start, end) = result.interval(referenceDate: date) {
+            let exactMinutes = Int(end.timeIntervalSince(start) / 60)
+            durationHours = exactMinutes / 60; durationMinutes = exactMinutes % 60
+            capturedInterval = (start, end, date, exactMinutes)
+        } else { capturedInterval = nil }
     }
 
     func saveEntry() async -> Bool {
@@ -110,11 +112,11 @@ class QuickEntryViewModel: ObservableObject {
 
             // Calculate start and end times based on date and duration
             let calendar = Calendar.current
-            let endTime = calendar.date(bySettingHour: calendar.component(.hour, from: Date()),
+            let endTime = suggestedInterval?.end ?? calendar.date(bySettingHour: calendar.component(.hour, from: Date()),
                                        minute: calendar.component(.minute, from: Date()),
                                        second: 0,
                                        of: date) ?? date
-            let startTime = endTime.addingTimeInterval(-Double(totalDurationMinutes * 60))
+            let startTime = suggestedInterval?.start ?? endTime.addingTimeInterval(-Double(totalDurationMinutes * 60))
 
             _ = try await timeEntryRepository.createTimeEntry(
                 projectId: projectId,
@@ -147,12 +149,9 @@ class QuickEntryViewModel: ObservableObject {
         durationMinutes = 0
         notes = ""
         smartTimeText = ""
-        smartTimeSummary = nil
+        capturedInterval = nil
         errorMessage = nil
     }
 
-    private func nearestQuarterHour(_ minutes: Int) -> Int {
-        let rounded = Int((Double(minutes) / 15.0).rounded()) * 15
-        return min(max(15, rounded), 12 * 60)
-    }
+
 }
