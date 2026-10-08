@@ -12,6 +12,7 @@ struct WorkspaceReportView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var exportURL: URL?
+    @State private var showingAccountantPacket = false
     private struct ExportDocument: Identifiable { let id = UUID(); let url: URL }
     @State private var exportDocument: ExportDocument?
     private struct Row { let date: String; let type: String; let name: String; let amount: Double; let status: String }
@@ -54,6 +55,7 @@ struct WorkspaceReportView: View {
                     LabeledContent("Legacy paid invoices without evidence", value: String(invoices.filter { $0.currency == currency && $0.needsLegacyReview }.count))
                     LabeledContent("Expenses missing receipts", value: String(expenses.filter { $0.currency == currency && inPeriod($0.expenseDate) && $0.status != .rejected && !$0.hasReceipt }.count))
                     LabeledContent("Expenses to categorize", value: String(expenses.filter { $0.currency == currency && inPeriod($0.expenseDate) && $0.status != .rejected && $0.category == .other }.count))
+                    if appState.currentUser?.canExportAccountantPacket == true { Button("Export accountant packet") { showingAccountantPacket = true }.disabled(rows.isEmpty) }
                     Button("Export Workspace CSV") { export() }
                     Button("Export Tax Packet CSV") { exportPacket() }
                     Text("The tax packet includes income, expenses and filing reminders due in this reporting period.").font(.caption)
@@ -77,6 +79,7 @@ struct WorkspaceReportView: View {
             await load()
         }
         .refreshable { await load() }
+        .sheet(isPresented: $showingAccountantPacket) { AccountantPacketSheet(year: year, month: month, currency: currency, basis: basis, start: period.start, end: inclusivePeriodEnd) }
         .sheet(item: $exportDocument, onDismiss: { if let exportURL { try? FileManager.default.removeItem(at: exportURL) }; exportURL = nil }) { document in ShareSheet(activityItems: [document.url]) }
     }
     private func load() async {

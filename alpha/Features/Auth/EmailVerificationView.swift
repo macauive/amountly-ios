@@ -25,115 +25,22 @@ class EmailVerificationViewModel: ObservableObject {
         self.email = email
     }
 
-    func verifyCode() async {
-        guard !verificationCode.isEmpty else {
-            errorMessage = "Please enter the verification code"
-            return
-        }
-
-        guard verificationCode.count == 8 else {
-            errorMessage = "Verification code must be 8 digits"
-            return
-        }
-
-        isLoading = true
-        errorMessage = nil
-
+    func verifyCode(appState: AppState) async {
+        guard !isLoading, verificationCode.count == 6, verificationCode.utf8.allSatisfy({ (48...57).contains($0) }) else { errorMessage = "Enter the 6-digit verification code."; return }
+        isLoading = true; errorMessage = nil; appState.beginSignIn()
+        defer { isLoading = false; appState.endSignIn() }
         do {
-            print("📧 EmailVerificationViewModel: Verifying code for \(email)")
-            let session = try await authService.verifyOTP(email: email, token: verificationCode)
-            print("✅ EmailVerificationViewModel: Verification successful")
-            print("🔐 EmailVerificationViewModel: User ID: \(session.user.id)")
-            print("🔐 EmailVerificationViewModel: Email confirmed: \(session.user.emailConfirmedAt != nil)")
-
-            // CRITICAL: Wait and confirm session is fully available before proceeding
-            print("⏳ EmailVerificationViewModel: Confirming session availability...")
-            var attempts = 0
-            let maxAttempts = 5
-            var sessionConfirmed = false
-
-            while attempts < maxAttempts {
-                if authService.isAuthenticated {
-                    sessionConfirmed = true
-                    print("✅ EmailVerificationViewModel: Session confirmed on attempt \(attempts + 1)")
-                    break
-                }
-
-                attempts += 1
-                print("⚠️ EmailVerificationViewModel: Attempt \(attempts)/\(maxAttempts) - Session not yet available, waiting...")
-                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-            }
-
-            guard sessionConfirmed else {
-                print("❌ EmailVerificationViewModel: Session not available after \(maxAttempts) attempts")
-                errorMessage = "Authentication session could not be established. Please try logging in manually."
-                isLoading = false
-                return
-            }
-
-            // Double-check by trying to get current session
-            guard let currentSession = authService.currentSession else {
-                print("❌ EmailVerificationViewModel: Session check failed - currentSession is nil")
-                errorMessage = "Authentication error. Please try logging in."
-                isLoading = false
-                return
-            }
-
-            print("✅ EmailVerificationViewModel: Session fully confirmed")
-            print("🔐 EmailVerificationViewModel: Current session user: \(currentSession.user.id)")
-            print("✅ EmailVerificationViewModel: Email verified successfully!")
-
-            // Show success confirmation instead of immediately navigating
-            showSuccessConfirmation = true
-            canProceed = true
-        } catch {
-            print("❌ EmailVerificationViewModel: Verification failed: \(error)")
-            if error.localizedDescription.contains("expired") {
-                errorMessage = "Verification code expired. Please request a new code."
-            } else if error.localizedDescription.contains("invalid") {
-                errorMessage = "Invalid verification code. Please check and try again."
-            } else {
-                errorMessage = error.localizedDescription
-            }
-        }
-
-        isLoading = false
+            _ = try await authService.verifyOTP(email: email, token: verificationCode)
+            verificationCode = ""; showSuccessConfirmation = true; canProceed = true
+        } catch { errorMessage = "Could not verify your email. Check the code or request a new one." }
     }
-
-    func proceedToLogin() async {
-        print("➡️ EmailVerificationViewModel: User clicked Continue - signing out and proceeding to login")
-        isLoading = true
-
-        do {
-            // Sign the user out to get a fresh authentication session
-            try await authService.signOut()
-            print("✅ EmailVerificationViewModel: User signed out successfully")
-
-            // Navigate to login
-            navigateToLogin = true
-        } catch {
-            print("❌ EmailVerificationViewModel: Sign out failed: \(error)")
-            errorMessage = "Failed to sign out. Please try again."
-        }
-
-        isLoading = false
-    }
-
+    func proceedToLogin() async { navigateToLogin = true }
     func resendCode() async {
-        isLoading = true
-        errorMessage = nil
-
-        do {
-            print("📧 EmailVerificationViewModel: Resending code to \(email)")
-            try await authService.resendOTP(email: email)
-            print("✅ EmailVerificationViewModel: Code resent successfully")
-        } catch {
-            print("❌ EmailVerificationViewModel: Resend failed: \(error)")
-            errorMessage = error.localizedDescription
-        }
-
-        isLoading = false
+        guard !isLoading else { return }; isLoading = true; errorMessage = nil; defer { isLoading = false }
+        do { try await authService.resendOTP(email: email) }
+        catch { errorMessage = "Could not request a code. Try again shortly." }
     }
+
 }
 
 struct EmailVerificationView: View {
@@ -162,7 +69,7 @@ struct EmailVerificationView: View {
                         .font(.alphaDisplayLarge)
                         .foregroundColor(.alphaPrimaryText)
 
-                    Text("We sent an 8-digit code to")
+                    Text("We sent a 6-digit code to")
                         .font(.alphaBody)
                         .foregroundColor(.alphaSecondaryText)
 
@@ -190,7 +97,7 @@ struct EmailVerificationView: View {
                                     .font(.alphaTitle)
                                     .foregroundColor(.alphaPrimaryText)
 
-                                Text("Your email has been successfully verified. Please log in with your password to continue.")
+                                Text("Your email is verified. Continue to set up your solo business.")
                                     .font(.alphaBody)
                                     .foregroundColor(.alphaSecondaryText)
                                     .multilineTextAlignment(.center)
@@ -199,7 +106,7 @@ struct EmailVerificationView: View {
 
                             // Continue Button
                             AlphaButton(
-                                "Continue to Log In",
+                                "Continue to setup",
                                 style: .primary,
                                 size: .large,
                                 isLoading: viewModel.isLoading,
@@ -256,10 +163,10 @@ struct EmailVerificationView: View {
                                 style: .primary,
                                 size: .large,
                                 isLoading: viewModel.isLoading,
-                                isDisabled: viewModel.verificationCode.count != 8
+                                isDisabled: viewModel.verificationCode.count != 6
                             ) {
                                 Task {
-                                    await viewModel.verifyCode()
+                                    await viewModel.verifyCode(appState: appState)
                                 }
                             }
                             .padding(.top, 16)
@@ -285,7 +192,7 @@ struct EmailVerificationView: View {
             }
         }
         .fullScreenCover(isPresented: $viewModel.navigateToLogin) {
-            LoginView()
+            AccountTypeSelectionView(email: viewModel.email, userName: userName)
                 .environmentObject(appState)
         }
         .interactiveDismissDisabled()

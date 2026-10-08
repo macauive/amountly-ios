@@ -71,6 +71,11 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Security") { NavigationLink("Change password", destination: ChangePasswordView()) }
+                Section("ChatGPT") {
+                    Link("Manage ChatGPT access", destination: URL(string: "https://amountly.app/chatgpt/connections")!)
+                    Text("Start linking from ChatGPT. Manage the read-only connection on Amountly's website with your existing account permissions.").font(.caption)
+                }
                 // Preferences Section
                 Section("Preferences") {
                     NavigationLink("Workspace Preferences", destination: WorkspacePreferencesView())

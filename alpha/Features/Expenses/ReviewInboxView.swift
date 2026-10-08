@@ -6,6 +6,9 @@ struct ReviewInboxView: View {
     @State private var expenses: [Expense] = []
     @State private var legacyInvoices: [Invoice] = []
     @State private var selectedInvoice: Invoice?
+    @State private var selectedExpense: Expense?
+    @State private var soloReview: Expense?
+    private var isSolo: Bool { appState.currentUser?.accountType == .freelancer && appState.currentUser?.organizationId == nil }
     @State private var entries: [TimeEntry] = []
     @State private var error: String?
     @State private var loading = true
@@ -16,7 +19,7 @@ struct ReviewInboxView: View {
     private var canReview: Bool { appState.currentUser?.accountType == .business && appState.currentUser?.isAdmin == true }
     var body: some View {
         List {
-            Text("Review captured expenses and time. Approvals require a different owner or administrator.").font(.caption)
+            Text(isSolo ? "Review saved amounts, currency, dates, categories and receipts. Reviewed is a personal check; expenses remain captured records." : "Review captured expenses and time. Approvals require a different owner or administrator.").font(.caption)
             if loading { ProgressView("Loading review inbox…") }
             if let error { Text(error).foregroundStyle(.red) }
             if !legacyInvoices.isEmpty {
@@ -27,11 +30,16 @@ struct ReviewInboxView: View {
                     }
                 }
             }
-            Section("Expenses to review") {
-                ForEach(expenses.filter { [.draft, .rejected, .submitted].contains($0.status) }) { expense in
+            Section(isSolo ? "Saved expense review" : "Expenses to review") {
+                ForEach(expenses.filter { isSolo ? ($0.needsReview || $0.reviewedAt != nil) : [.draft, .rejected, .submitted].contains($0.status) }) { expense in
                     VStack(alignment: .leading) {
                         Text(expense.description).font(.headline)
                         Text("\(expense.amountFormatted) · \(expense.status.displayName)").font(.caption)
+                        Button("Open saved expense") { selectedExpense = expense }
+                        if isSolo && expense.userId == appState.currentUser?.id && [.draft, .rejected].contains(expense.status) {
+                            Text(expense.reviewedAt == nil ? "Needs review" : "Reviewed").font(.caption)
+                            Button(expense.reviewedAt == nil ? "Mark reviewed" : "Clear review") { soloReview = expense }
+                        }
                         controls(kind: "expenses", id: expense.id, title: expense.description, owner: expense.userId, status: expense.status.rawValue, version: expense.version)
                     }
                 }
@@ -48,6 +56,10 @@ struct ReviewInboxView: View {
         }.navigationTitle("Review Inbox")
             .task { await load() }.refreshable { await load() }
             .sheet(item: $selectedInvoice) { invoice in InvoiceDetailSheet(invoice: invoice, onUpdate: { Task { await load() } }) }
+            .sheet(item: $selectedExpense) { expense in ExpenseDetailSheet(expense: expense) { Task { await load() } } }
+            .confirmationDialog("Confirm expense review", isPresented: Binding(get: { soloReview != nil }, set: { if !$0 { soloReview = nil } }), titleVisibility: .visible) {
+                if let expense = soloReview { Button(expense.reviewedAt == nil ? "Confirm mark reviewed" : "Confirm clear review") { Task { await markReviewed(expense) } } }
+            } message: { Text("Check the saved amount, currency, date, category and receipt. This change is recorded in history.") }
             .sheet(item: $history) { record in RecordHistoryView(kind: record.kind, id: record.id) }
             .confirmationDialog("Confirm review action", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
                 if let record = pending { Button(record.action.capitalized) { Task { await review(record) } } }
@@ -76,6 +88,11 @@ struct ReviewInboxView: View {
             if appState.currentUser?.accountType != .personal { entries = try await TimeEntryRepository().fetchTimeEntries() }
             error = nil
         } catch { self.error = "Could not load the complete review inbox." }
+    }
+    private func markReviewed(_ expense: Expense) async {
+        guard !busy else { return }; busy = true; defer { busy = false; soloReview = nil }
+        do { try await ExpenseRepository().setReviewed(expense, reviewed: expense.reviewedAt == nil); await load() }
+        catch { self.error = RecordError.safe(error).localizedDescription }
     }
     private func review(_ record: ReviewRecord) async {
         busy = true; defer { busy = false }
@@ -108,9 +125,7 @@ struct RecordHistoryView: View {
                     do {
                         while true {
                             let client = SupabaseClientManager.shared.client
-                            let query = kind == "invoices"
-                                ? client.from("invoice_events").select("id,action,created_at").eq("invoice_id", value: id)
-                                : client.from("record_events").select("id,action,created_at").eq("record_type", value: kind).eq("record_id", value: id)
+                            let query = client.from("record_events").select("id,action,created_at").eq("record_type", value: kind).eq("record_id", value: id)
                             let data = try await query.order("created_at", ascending: false).order("id").range(from: events.count, to: events.count + 199).execute().data
                             let page = try RecordCoding.decoder().decode([RecordEvent].self, from: data); events += page
                             if page.count < 200 { break }

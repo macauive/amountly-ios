@@ -1,6 +1,8 @@
 // swift-tools-version: 6.0
 import PackageDescription
 let package = Package(name: "AmountlyRules", platforms: [.macOS(.v13)], products: [.library(name: "AmountlyRules", targets: ["AmountlyRules"])], targets: [
+    .target(name: "AmountlyPlatform", path: "alpha/Core/Platform"),
+    .testTarget(name: "AmountlyPlatformTests", dependencies: ["AmountlyPlatform"], path: "Tests/AmountlyPlatformTests"),
     .target(name: "AmountlyAI", path: "alpha/Core/AI"),
     .testTarget(name: "AmountlyAITests", dependencies: ["AmountlyAI"], path: "Tests/AmountlyAITests"),
     .target(name: "AmountlyRules", path: "alpha/Core/Reporting"),

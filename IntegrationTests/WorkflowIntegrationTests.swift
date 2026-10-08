@@ -8,7 +8,7 @@ final class WorkflowIntegrationTests: XCTestCase {
     struct Actor: Decodable { let id: String; let email: String; let password: String; let organization: String?; let client: String?; let project: String?; let timeEntry: String? }
     struct Fixtures: Decodable { let actors: [String: Actor]; let anonKey: String }
     private var fixtures: Fixtures!
-    private var client: SupabaseClient { SupabaseClientManager.shared.client }
+    private var client: AmountlyDataClient { SupabaseClientManager.shared.client }
     private var day: Date { RecordCoding.parseDate("2026-01-15")! }
     private var due: Date { RecordCoding.parseDate("2026-02-15")! }
 
@@ -250,6 +250,27 @@ final class WorkflowIntegrationTests: XCTestCase {
         await denied { _ = try await AuthService.shared.getCurrentUser() }
         // Restore the synthetic owner so the same fixture can be inspected in the UI.
         try await login("owner")
+    }
+
+    func test09SoloExpenseReviewAndEditReset() async throws {
+        _ = try await login("freelancer")
+        let repository = ExpenseRepository()
+        var item = try await expense(10.80)
+        XCTAssertTrue(item.needsReview)
+        try await repository.setReviewed(item, reviewed: true)
+        item = try await repository.fetchExpense(id: item.id)
+        XCTAssertNotNil(item.reviewedAt); XCTAssertFalse(item.needsReview)
+        try await repository.setReviewed(item, reviewed: false)
+        item = try await repository.fetchExpense(id: item.id)
+        XCTAssertNil(item.reviewedAt); XCTAssertTrue(item.needsReview)
+        try await repository.setReviewed(item, reviewed: true)
+        item = try await repository.fetchExpense(id: item.id)
+        _ = try await repository.updateExpense(id: item.id, description: "Synthetic corrected receipt", amount: 11.80, currency: "USD", category: "OFFICE_SUPPLIES", merchant: "Demo Shop", expenseDate: day, projectId: nil, notes: nil, status: item.status.rawValue, expectedVersion: item.version)
+        item = try await repository.fetchExpense(id: item.id)
+        XCTAssertEqual(item.amount, 11.80); XCTAssertNil(item.reviewedAt)
+        _ = try await login("outsider")
+        await denied { try await repository.setReviewed(item, reviewed: true) }
+        _ = try await login("freelancer")
     }
 
     func test08LoginFormFailureAndRecovery() async throws {

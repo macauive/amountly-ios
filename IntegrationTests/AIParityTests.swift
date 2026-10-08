@@ -43,13 +43,15 @@ final class AIParityTests: XCTestCase {
         try XCTSkipUnless(env["AMOUNTLY_AI_LIVE_TESTING"] == "1", "Live synthetic requests require explicit opt-in and a QA login.")
         let email = try XCTUnwrap(env["AMOUNTLY_AI_QA_EMAIL"])
         let password = try XCTUnwrap(env["AMOUNTLY_AI_QA_PASSWORD"])
-        // Separate SDK storage prevents overwriting the user's native app session.
-        let config = SupabaseConfig.shared
-        let supabase = SupabaseClient(supabaseURL: config.projectURL, supabaseKey: config.anonKey,
-            options: .init(auth: .init(storageKey: "amountly-ai-qa-verification", autoRefreshToken: false)))
-        do { try await supabase.auth.signIn(email: email, password: password) }
+        // A private in-memory Render session never replaces the user's app login.
+        let transport = AmountlyTransport()
+        let client = AmountlyDataClient(transport: transport)
+        do { _ = try await client.auth.signIn(email: email, password: password) }
         catch { XCTFail("QA sign-in failed; no AI request was sent."); return }
-        let api = AIClient { let session = try await supabase.auth.session; return AISession(userID: session.user.id.uuidString, token: session.accessToken) }
+        let api = AIClient(transport: { request in try await transport.send(request, limit: 256000) }) {
+            let session = try await client.auth.session
+            return AISession(userID: session.user.id.uuidString, token: transport.generation.uuidString)
+        }
         var failures: [String] = []
         func verify<R: AIResult, P: Encodable>(_ task: AITask, _ payload: P, _ type: R.Type, check: (R) -> Bool = { _ in true }) async {
             do {
@@ -66,7 +68,7 @@ final class AIParityTests: XCTestCase {
         await verify(.contact, "Contact: Alex Example\nCompany: Demo Studio\nEmail: alex@example.invalid", AIContact.self) { $0.name == "Demo Studio" && $0.contact_name == "Alex Example" && $0.email == "alex@example.invalid" }
         await verify(.reminder, AIReminderInput(invoice_number: "QA-SYNTHETIC-1", total: 150, currency: "USD", due_date: "2026-09-29", status: "SENT", client: .init(name: "Demo Studio", contact_name: nil)), AIReminder.self) { !$0.subject.isEmpty && !$0.body.isEmpty }
         await verify(.dashboard, AIDashboardInput(accountType: "freelancer", searchQuery: "Which invoice needs review?", bills: [], expenses: [], workData: .init(invoices: [.init(id: "00000000-0000-4000-8000-000000000001", label: "QA-SYNTHETIC-1", amount: 150, date: "2026-09-29", status: "OVERDUE")], expenses: [], timeEntries: [], vendorBills: []), candidateHrefs: [.dashboard, .invoices]), AIDashboard.self) { !$0.monthlySummary.headline.isEmpty }
-        try? await supabase.auth.signOut(scope: .local)
+        try? await client.auth.signOut()
         XCTAssertTrue(failures.isEmpty, failures.joined(separator: "\n"))
     }
 }

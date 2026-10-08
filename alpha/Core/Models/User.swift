@@ -86,6 +86,10 @@ extension User {
         capabilities.contains(capability)
     }
 
+    var canExportAccountantPacket: Bool {
+        isActive && accountType == .freelancer && organizationId == nil && hasCapability(.exportTaxDocuments)
+    }
+
     // MARK: - Convenience Capability Checks
 
     /// Can manage team members (invite, edit, remove)

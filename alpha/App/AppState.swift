@@ -13,6 +13,10 @@ import Auth
 @MainActor
 class AppState: ObservableObject {
     @Published var isAuthenticated = false
+    @Published var needsSoloSetup = false
+    @Published var needsOrganizationSetup = false
+    @Published var setupName = ""
+    @Published var setupEmail = ""
     @Published var currentUser: User?
     @Published var organization: Organization?
     @Published var isLoading = false
@@ -34,6 +38,7 @@ class AppState: ObservableObject {
         // Hosted XCTest owns its sessions; background UI restoration would race it.
         if ProcessInfo.processInfo.environment["AMOUNTLY_XCTEST"] == "1" { return }
 #endif
+        PrivateDocument.removeAll()
         // Observe auth state changes
         authStateTask = authService.observeAuthStateChanges { [weak self] event, session in
             Task { @MainActor in
@@ -66,6 +71,7 @@ class AppState: ObservableObject {
     // MARK: - Authentication
 
     func login(user: User, organization: Organization?) {
+        needsSoloSetup = false; needsOrganizationSetup = false; setupName = ""; setupEmail = ""
         cancelRestoreTask()
         self.currentUser = user
         self.organization = organization  // Can be nil for personal/freelancer accounts
@@ -79,6 +85,8 @@ class AppState: ObservableObject {
     }
 
     func logout() {
+        needsSoloSetup = false; needsOrganizationSetup = false; setupName = ""; setupEmail = ""
+        PrivateDocument.removeAll()
         cancelRestoreTask()
         self.currentUser = nil
         self.organization = nil
@@ -130,13 +138,17 @@ class AppState: ObservableObject {
             }
 
             guard restoreGeneration == generation else { return }
+            needsSoloSetup = false; needsOrganizationSetup = false; setupName = ""; setupEmail = ""
             currentUser = restoredState.user
             organization = restoredState.organization
             isAuthenticated = true
             isLoading = false
-
-            let restoredOrganizationId = restoredState.organization?.id ?? "none"
-            print("✅ AppState.performRestore(\(trigger)): restored user=\(restoredState.user.id) org=\(restoredOrganizationId)")
+        } catch AuthError.profileSetupRequired {
+            guard restoreGeneration == generation else { return }
+            enterSetup(organization: false)
+        } catch AuthError.organizationSetupRequired {
+            guard restoreGeneration == generation else { return }
+            enterSetup(organization: true)
         } catch is CancellationError {
             print("ℹ️ AppState.performRestore(\(trigger)): cancelled")
         } catch let error as URLError where error.code == .cancelled {
@@ -148,7 +160,15 @@ class AppState: ObservableObject {
         }
     }
 
+    private func enterSetup(organization: Bool) {
+        currentUser = nil; self.organization = nil; isAuthenticated = false; isLoading = false; error = nil
+        setupName = authService.currentSession?.user.userMetadata["name"]?.description ?? "New user"
+        setupEmail = authService.currentSession?.user.email ?? ""
+        needsSoloSetup = !organization; needsOrganizationSetup = organization
+    }
+
     private func enterRecoveryState(for error: Error) {
+        needsSoloSetup = false; needsOrganizationSetup = false
         currentUser = nil
         organization = nil
         isAuthenticated = false
@@ -163,6 +183,8 @@ class AppState: ObservableObject {
     }
 
     private func onSignedOut() {
+        needsSoloSetup = false; needsOrganizationSetup = false; setupName = ""; setupEmail = ""
+        PrivateDocument.removeAll()
         self.currentUser = nil
         self.organization = nil
         self.isAuthenticated = false

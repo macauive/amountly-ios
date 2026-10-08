@@ -1,11 +1,100 @@
 # Web / iOS alignment
 
+## October 7, 2026 refresh
+
+Compared the clean web checkout at `1f85aa2` with native baseline `0d23cc6`.
+The web source, current API routes and database commands are authoritative.
+The earlier September findings below are historical.
+
+| Web change | Native alignment |
+| --- | --- |
+| Render / Better Auth migration | Production auth, PostgREST queries, AI, receipt storage and accountant downloads now use `https://amountly.app/api/...`. The existing typed query builders remain; direct Supabase auth/storage is limited to the opt-in loopback Debug harness. No production Supabase configuration file is required. |
+| Private cookie authentication | Secure session cookie stays in ephemeral networking and a device-only Keychain item. Fixed origin, blocked redirects, bounded downloads, safe errors and session-generation checks prevent credential forwarding and stale-account responses. Password and session tokens are never logged. |
+| Auth and onboarding | Six-digit verification, 12–128-character passwords, password reset/change, current-password confirmation and revocation of other sessions. New verified users continue to solo-business setup. Existing profiles keep their role/account type/workspace; incomplete business profiles resume organization setup. |
+| Receipt-file AI | JPEG, PNG, WebP and PDF bytes go to the existing `/api/ai/receipt` service. No provider key is on-device. Suggestions require Apply, editing and explicit receipt confirmation before saving. Missing amounts/currencies/dates remain unresolved; invoices, statements and other documents do not populate receipt expense fields. Cancellation and account changes discard results. |
+| Private originals | Upload uses `/api/receipts/upload` with a server-generated path. Selected originals can be previewed. Saved receipts download through authenticated networking into protected temporary files, then use the native share sheet. Unsupported legacy URL-only references fail safely without fetching arbitrary URLs. |
+| Solo review | Optional `reviewed_at`, independent of approval; Mark reviewed/Clear review use the versioned `set_expense_review` command. Only an active standalone freelancer can review their own editable record. Editing resets review through the existing database trigger. |
+| Expense workspace | Merchant/description search, category/date/status/review filters; expense counts and separate totals for each loaded currency, including all captured statuses. Duplicate receipt warnings use authorized loaded records. Existing editable drafts/rejected records and attachments can be corrected. |
+| Overview | Upload-a-receipt quick action, recent expense links and specific expense search destinations. |
+| Accountant packet | Only active standalone freelancer accounts can export, matching web authorization; empty reports disable the action. Reports → Export accountant packet → date range within the fiscal year, currency and income basis → authenticated ZIP → explicit native sharing. The existing server generates CSV records, review/availability index, original receipts and SHA-256 metadata. No native reimplementation of ownership or packet generation. |
+| ChatGPT connection | Settings links to the web's read-only connection management. OAuth consent remains browser/ChatGPT-owned; the native app does not create a second grant implementation. |
+
+Invoices, payments/corrections, time billing, clients/projects, vendor bills,
+purchase orders and financial reporting continue through the same protected
+commands and database policies. Every active native table/command was checked
+against the web API allowlist. The only unmatched tables belong to the deferred
+Team module, which remains hidden by the existing product-scope flag.
+
+Verification completed after the user authorized hosted QA tests, dedicated
+freelancer account creation and XCUITest:
+
+- **29 Swift unit/rules tests passed**: existing AI/rules, receipt-file contracts,
+  secure cookie persistence/deletion, redirect/destination rejection, response
+  bounds and credential-store failure.
+- **13 simulator-hosted offline tests passed**: cookie login/protected reads,
+  sign-out/revocation, six-digit OTP/input limits, password-change contract,
+  existing-profile preservation, missing versus inactive profiles, solo profile
+  creation without a legacy account mutation, review-marker decoding,
+  standalone-freelancer export eligibility, exact native time application,
+  safe dashboard summaries and synthetic Vision OCR. These responses are mocked.
+- **113 current web reference tests passed** for receipt review/API and private
+  files, expense navigation/workflows/solo onboarding, review authorization,
+  accountant-packet generation, ownership scope and export UI.
+- **Three hosted live tests passed**: all seven shared AI tasks (including two
+  time interpretations), protected expense/invoice/current-user reads, synthetic
+  receipt-image extraction with exact total/currency/date, session sign-out,
+  dedicated freelancer profile setup, private upload, saved review marker,
+  authenticated original download and accountant ZIP.
+- The existing QA business account received the expected accountant **403**.
+  This exposed and corrected a native eligibility mismatch: a generic tax
+  capability alone no longer displays or starts accountant export.
+- The new dedicated freelancer account exercises real native solo setup. That
+  exposed an extra legacy account-type command after profile insertion; removing
+  it matches the web flow. Both the regression and live setup checks passed.
+  The account was provisioned administratively, so signup-email delivery is
+  outside this coverage. Its unique password is kept in an owner-only local
+  credential file outside Git. Existing QA accounts and roles were preserved.
+- The authorized Render ZIP contains exactly one synthetic record and receipt
+  index entry. The Reviewed marker, original receipt bytes and SHA-256 matched.
+- **Nine native database workflow tests passed** against a fresh disposable
+  loopback stack with the current web migrations. Coverage includes writes,
+  optimistic concurrency, committed-response loss/retries, tenant/role checks,
+  private receipt upload/download and signed-link expiration, pagination,
+  session restore, and solo Mark/Clear reviewed with editing resetting review.
+- **Two XCUITests passed**. The local receipt workflow selected a synthetic image
+  through Files, opened/dismissed Quick Look, saved a draft, toggled review and
+  corrected its amount. A database oracle checked exactly one persisted record
+  and review reset. The hosted freelancer workflow downloaded the saved receipt
+  and accountant ZIP, opened each native share sheet and Files destination, then
+  cancelled before saving or sending.
+- Debug integration and UI test builds and an unsigned Release device build
+  passed. Python runner syntax, diff whitespace and changed-file credential
+  review passed. Hosted and local inspection sessions were signed out; generated
+  simulator files and temporary credential-bearing run configurations were
+  removed. The isolated local services were stopped without resetting data.
+
+In total, **56 native tests passed** (29 unit/rules, 13 mocked, nine local
+database, three hosted live, two UI), alongside 113 web reference tests.
+Physical-device camera capture remains unverified because no connected,
+unlocked device was available. This is not an App Store archive or exhaustive
+UI automation of every form. One synthetic hosted expense/original remains in
+the dedicated QA account for repeatable checks; existing hosted financial
+records were preserved. No messages, deployments, hosted migrations or pushes
+were performed.
+
+See `IntegrationTests/README.md` and the offline/integration/UI runners in
+`scripts/` for reproduction. Existing Supabase sessions do not become Render
+sessions; users sign in again with their existing Amountly credentials after
+this backend change.
+
+## Historical September review
+
 Reviewed September 26, 2026 against `/Users/iver/Projects/amountly` at `e5b4f2b`.
 The active Next.js dashboard routes, services, reporting helpers, tests, and current
 Supabase migrations were the reference. The older web mock dashboard and iOS
 changelog were not treated as the current product contract.
 
-## Current AI implementation — September 30, 2026
+## Historical AI implementation — September 30, 2026
 
 The seven active web AI tasks now use the same authenticated `https://amountly.app/api/ai`
 service from native SwiftUI. OpenAI keys and model selection remain on the web

@@ -16,6 +16,7 @@ struct HomeView: View {
     @State private var showInvoice = false
     @State private var showBill = false
     @State private var showExpense = false
+    @State private var selectedExpense: Expense?
     @State private var showPayment = false
     @State private var showTime = false
     @State private var showAccount = false
@@ -66,7 +67,7 @@ struct HomeView: View {
                                         Button("\(row.invoiceNumber) · \(row.totalFormatted)") { onFinancialSearchDestination(.invoices) }
                                     }
                                     ForEach(expenses.filter { $0.description.localizedCaseInsensitiveContains(search) || ($0.merchant?.localizedCaseInsensitiveContains(search) ?? false) || (search.lowercased().contains("receipt") && !$0.hasReceipt) }.prefix(5)) { row in
-                                        Button("\(row.description) · \(row.amountFormatted)") { onFinancialSearchDestination(.expenses) }
+                                        Button("\(row.description) · \(row.amountFormatted)") { selectedExpense = row }
                                     }
                                     ForEach(bills.filter { $0.name.localizedCaseInsensitiveContains(search) || $0.payee.localizedCaseInsensitiveContains(search) || (search.lowercased().contains("overdue") && $0.isOverdue) }.prefix(5)) { row in
                                         Button("\(row.name) · \(row.amountFormatted)") { onFinancialSearchDestination(.bills) }
@@ -83,7 +84,7 @@ struct HomeView: View {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                             if appState.hasCapability(.createInvoices) { Button("Create Invoice", systemImage: "doc.badge.plus") { showInvoice = true } }
                             if appState.hasCapability(.viewBills) || appState.hasCapability(.viewAccountsPayable) { Button("Add Bill", systemImage: "creditcard") { showBill = true } }
-                            if appState.hasCapability(.submitExpenses) { Button("Add Expense", systemImage: "receipt") { showExpense = true } }
+                            if appState.hasCapability(.submitExpenses) { Button(personal ? "Add Expense" : "Upload a receipt", systemImage: "receipt") { showExpense = true } }
                             if appState.hasCapability(.recordPayments) { Button("Record Payment", systemImage: "dollarsign.circle") { showPayment = true } }
                             if appState.hasCapability(.trackTime) && !personal { Button("Log Time", systemImage: "clock") { showTime = true } }
                         }.buttonStyle(.bordered).padding(.top, 8)
@@ -93,6 +94,13 @@ struct HomeView: View {
                             if !personal { Button("Review open invoices") { onFinancialSearchDestination(.invoices) } }
                             Button("Review bills due") { onFinancialSearchDestination(.bills) }
                             Button("Capture missing expenses") { onFinancialSearchDestination(.expenses) }
+                            if !expenses.isEmpty {
+                                Text("Recent expenses").font(.headline)
+                                ForEach(expenses.sorted { $0.updatedAt > $1.updatedAt }.prefix(5)) { expense in
+                                    Button("\(expense.merchant ?? expense.description) · \(expense.amountFormatted)") { selectedExpense = expense }
+                                        .accessibilityValue(expense.needsReview ? "\(expense.status.displayName), Needs review" : expense.reviewedAt != nil ? "\(expense.status.displayName), Reviewed" : expense.status.displayName)
+                                }
+                            }
                             Button("Review income and expenses for export") { onFinancialSearchDestination(.taxPrep) }
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                     }
@@ -102,9 +110,10 @@ struct HomeView: View {
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Account", systemImage: "person.crop.circle") { showAccount = true } } }
                 .task { await load() }.refreshable { await load() }
                 .onReceive(NotificationCenter.default.publisher(for: .recordsChanged)) { _ in Task { await load() } }
+                .sheet(item: $selectedExpense) { expense in ExpenseDetailSheet(expense: expense) { Task { await load() } } }
                 .sheet(isPresented: $showInvoice) { CreateInvoiceSheet(isPresented: $showInvoice) }
                 .sheet(isPresented: $showBill) { QuickBillSheet(isPresented: $showBill) }
-                .sheet(isPresented: $showExpense) { ExpenseFormSheet(isPresented: $showExpense, onSave: {}) }
+                .sheet(isPresented: $showExpense) { ExpenseFormSheet(isPresented: $showExpense, openReceiptPicker: !personal, onSave: { Task { await load() } }) }
                 .sheet(isPresented: $showPayment) { QuickPaymentSheet(isPresented: $showPayment) }
                 .sheet(isPresented: $showTime) { QuickEntrySheet(isPresented: $showTime) }
                 .sheet(isPresented: $showAccount) { AccountSheet(isPresented: $showAccount) }

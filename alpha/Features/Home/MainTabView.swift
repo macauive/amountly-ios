@@ -144,7 +144,7 @@ struct MainTabView: View {
         }
         .sheet(isPresented: $showingTaxPrep) { NavigationStack { WorkspaceReportView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingTaxPrep = false } } } } }
         .sheet(isPresented: $showingAddExpense) {
-            ExpenseFormSheet(isPresented: $showingAddExpense, onSave: {})
+            ExpenseFormSheet(isPresented: $showingAddExpense, openReceiptPicker: appState.currentUser?.accountType != .personal, onSave: {})
                 .withAppTheme()
         }
     }
@@ -223,7 +223,7 @@ struct MainTabView: View {
         if appState.hasCapability(.submitExpenses) {
             actions.append(QuickAction(
                 icon: "dollarsign.circle.fill",
-                label: "Add Expense",
+                label: appState.currentUser?.accountType == .personal ? "Add Expense" : "Upload a receipt",
                 color: .green,
                 action: { showingAddExpense = true }
             ))

@@ -8,49 +8,12 @@
 import Foundation
 import Supabase
 
-class SupabaseClientManager {
+// Historical name retained at repository call sites; production uses Render.
+@MainActor
+final class SupabaseClientManager {
     static let shared = SupabaseClientManager()
-
-    let client: SupabaseClient
-
-    private init() {
-        let config = SupabaseConfig.shared
-
-        var projectURL = config.projectURL
-        var publicKey = config.anonKey
-        var storageKey: String? = nil
-#if DEBUG
-        // Integration runs are opt-in and can only target the loopback test stack.
-        // Never permit an environment override to redirect credentials to a remote host.
-        if ProcessInfo.processInfo.environment["AMOUNTLY_LOCAL_TESTING"] == "1" {
-            let env = ProcessInfo.processInfo.environment
-            guard let raw = env["AMOUNTLY_LOCAL_URL"], let localURL = URL(string: raw),
-                  localURL.scheme == "http", localURL.host == "127.0.0.1",
-                  [54321, 54331].contains(localURL.port ?? 0), localURL.user == nil,
-                  localURL.password == nil, localURL.query == nil, localURL.fragment == nil,
-                  localURL.path.isEmpty || localURL.path == "/",
-                  let key = env["AMOUNTLY_LOCAL_ANON_KEY"], !key.isEmpty else {
-                preconditionFailure("Local integration configuration is missing or not loopback-only.")
-            }
-            projectURL = localURL; publicKey = key
-            storageKey = "amountly-local-integration-session"
-        }
-#endif
-        self.client = SupabaseClient(
-            supabaseURL: projectURL,
-            supabaseKey: publicKey,
-            options: SupabaseClientOptions(
-                auth: .init(
-                    storageKey: storageKey,
-                    flowType: .pkce,
-                    autoRefreshToken: true,
-                    emitLocalSessionAsInitialSession: true
-                )
-            )
-        )
-
-        print("🔧 SupabaseClient: Initialized")
-    }
+    let client = AmountlyDataClient()
+    private init() {}
 }
 
 struct OwnershipScope {

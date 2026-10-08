@@ -1,4 +1,90 @@
-# Native local integration checks
+# Native verification
+
+## Current Render alignment (October 7, 2026)
+
+Production uses the web's cookie-authenticated Render APIs. The loopback Supabase
+instructions below remain a legacy database-workflow harness; they do not prove
+current Render auth, receipt-file AI or accountant ZIP behavior.
+
+For current offline verification, build the simulator test target, then run only
+the explicitly mocked tests. This runner disables app restoration and live tests,
+removes QA/local credential overrides, and deletes its temporary `.xctestrun`.
+
+```sh
+swift test --scratch-path /private/tmp/amountly-alignment-rules
+xcodebuild -project alpha.xcodeproj -scheme AmountlyIntegration \
+  -destination 'platform=iOS Simulator,id=SIMULATOR_UUID' \
+  -derivedDataPath /private/tmp/amountly-alignment-build build-for-testing
+python3 scripts/run-offline-tests.py \
+  --products /private/tmp/amountly-alignment-build/Build/Products \
+  --device SIMULATOR_UUID
+```
+
+Use an available arm64 simulator ID from `xcrun simctl list devices available`.
+The Swift suites cover 29 tests and the hosted runner selects thirteen tests. The
+hosted tests do not write financial records or call a model provider.
+
+The existing `AIParityTests/testLiveSharedAIService` now uses an isolated
+in-memory Render cookie session. `RenderLiveSmokeTests` checks protected reads,
+one synthetic receipt-file extraction and accountant packet authorization. An
+active standalone freelancer must receive ZIP bytes; other account types must
+receive 403. The designated QA business account verified denial.
+They require `AMOUNTLY_AI_LIVE_TESTING=1` and QA credentials provided locally via
+`AMOUNTLY_AI_QA_EMAIL` / `AMOUNTLY_AI_QA_PASSWORD`. **Do not run them without explicit
+authorization for hosted QA sign-in, protected record reads, synthetic AI uploads
+and packet downloads.** Do not place credentials in shell history, source,
+tracked configuration or logs. The two live checks passed during this refresh
+after explicit user authorization. `testPrepareManualQAUI` additionally requires
+`AMOUNTLY_QA_UI=prepare`; it persists the normal cookie only in the simulator
+Keychain for inspection. Always finish with `AMOUNTLY_QA_UI=cleanup` and only
+`testCleanUpManualQAUI`, which signs that hosted session out.
+
+A third explicit hosted check, `testLiveFreelancerSetupReceiptAndPacket`,
+requires `AMOUNTLY_SYNTHETIC_FREELANCER_TESTING=1`, the dedicated QA email/password
+and `AMOUNTLY_FREELANCER_QA_ID`. It refuses an identity mismatch and creates only
+synthetic expenses in the new freelancer account. It exercises the native
+profile contract, private upload, saved review marker, original byte match and
+an authorized ZIP. On this refresh the ZIP's record, Reviewed index, original
+bytes and SHA-256 matched. The account has a unique password stored outside Git;
+existing QA accounts and their roles were preserved. This fixture was provisioned
+administratively, so it does not prove signup-email delivery.
+
+The browser-managed ChatGPT connection has a native Settings link. The local
+receipt XCUITest passed Files selection, Quick Look presentation/dismissal,
+manual draft save, Mark/Clear reviewed and a corrected amount resetting review.
+Its oracle reads the real local database and checks exactly one saved record.
+After preparing the loopback stack below, reproduce it with:
+
+```sh
+python3 scripts/run-integration-tests.py \
+  --fixtures /private/tmp/amountly-ios-fixtures.json \
+  --products /private/tmp/amountly-alignment-build/Build/Products \
+  --device SIMULATOR_UUID --prepare-receipt-ui
+xcodebuild -project alpha.xcodeproj -scheme AmountlyUI \
+  -destination 'platform=iOS Simulator,id=SIMULATOR_UUID' \
+  -derivedDataPath /private/tmp/amountly-alignment-ui-build build-for-testing
+python3 scripts/run-ui-tests.py \
+  --fixtures /private/tmp/amountly-ios-fixtures.json \
+  --products /private/tmp/amountly-alignment-ui-build/Build/Products \
+  --device SIMULATOR_UUID
+python3 scripts/run-integration-tests.py \
+  --fixtures /private/tmp/amountly-ios-fixtures.json \
+  --products /private/tmp/amountly-alignment-build/Build/Products \
+  --device SIMULATOR_UUID --cleanup-receipt-ui
+```
+
+Open Files once to initialize its local container. The UI runner copies only the
+generated synthetic PNG into Files, removes that copy afterward and deletes its
+private run configuration. Hosted share verification uses `HostedShareUITests`
+with `AMOUNTLY_SYNTHETIC_SHARE_TESTING=1` after an explicitly prepared dedicated
+freelancer session. This check passed for the downloaded private receipt and
+accountant ZIP, opening Files destinations and cancelling before saving or
+sending. Finish by signing the prepared native session out. Physical camera
+capture still requires a connected, unlocked device. Loopback native sessions
+are blocked from hosted AI/receipt extraction/accountant downloads, so they
+cannot borrow a previously saved Render cookie.
+
+## Legacy local integration checks
 
 These are app-hosted XCTest tests calling the real Swift repositories against a
 **disposable loopback Supabase stack**. They do not click through every SwiftUI

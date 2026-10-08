@@ -8,6 +8,7 @@
 import SwiftUI
 import Combine
 import UniformTypeIdentifiers
+import QuickLook
 
 // MARK: - ViewModel
 
@@ -19,6 +20,9 @@ class ExpenseViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var selectedFilter: ExpenseFilter = .all
     @Published var searchText = ""
+    @Published var categoryFilter = "all"
+    @Published var startFilter = ""
+    @Published var endFilter = ""
 
     // Summary metrics
     @Published var totalExpenses: Double = 0
@@ -28,12 +32,21 @@ class ExpenseViewModel: ObservableObject {
     private let expenseRepository = ExpenseRepository()
 
     var filteredExpenses: [Expense] {
-        var result = expenses
+        guard (startFilter.isEmpty || AIValidation.date(startFilter) != nil), (endFilter.isEmpty || AIValidation.date(endFilter) != nil), startFilter.isEmpty || endFilter.isEmpty || startFilter <= endFilter else { return [] }
+        var result = expenses.filter { (categoryFilter == "all" || $0.category.rawValue == categoryFilter) && (startFilter.isEmpty || RecordCoding.day($0.expenseDate) >= startFilter) && (endFilter.isEmpty || RecordCoding.day($0.expenseDate) <= endFilter) }
 
         // Apply status filter
         switch selectedFilter {
         case .all:
             break
+        case .needsReview:
+            result = result.filter(\.needsReview)
+        case .reviewed:
+            result = result.filter { $0.reviewedAt != nil }
+        case .draft:
+            result = result.filter { $0.status == .draft }
+        case .reimbursed:
+            result = result.filter { $0.status == .reimbursed }
         case .pending:
             result = result.filter { $0.status == .submitted }
         case .approved:
@@ -115,7 +128,11 @@ class ExpenseViewModel: ObservableObject {
 
 enum ExpenseFilter: String, CaseIterable, Identifiable {
     case all = "All"
-    case pending = "Pending"
+    case needsReview = "Needs review"
+    case reviewed = "Reviewed"
+    case draft = "Draft"
+    case reimbursed = "Reimbursed"
+    case pending = "Submitted"
     case approved = "Approved"
     case rejected = "Rejected"
 
@@ -133,30 +150,7 @@ struct ExpenseView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Summary Cards
-                HStack(spacing: 12) {
-                    ExpenseSummaryCard(
-                        title: "Total",
-                        value: viewModel.totalExpenses.formatted(.currency(code: appState.currentUser?.reportingCurrency ?? "USD")),
-                        icon: "dollarsign.circle",
-                        color: .blue
-                    )
-
-                    ExpenseSummaryCard(
-                        title: "Pending",
-                        value: "\(viewModel.pendingCount)",
-                        icon: "clock",
-                        color: .orange
-                    )
-
-                    ExpenseSummaryCard(
-                        title: "Approved",
-                        value: viewModel.approvedTotal.formatted(.currency(code: appState.currentUser?.reportingCurrency ?? "USD")),
-                        icon: "checkmark.circle",
-                        color: .green
-                    )
-                }
-                .padding()
+                ExpenseWorkspaceSummary(expenses: viewModel.expenses)
 
                 // Filter Pills
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -175,6 +169,7 @@ struct ExpenseView: View {
                 }
                 .padding(.bottom, 12)
 
+                ExpenseListFilters(viewModel: viewModel)
                 // Expenses List
                 if viewModel.isLoading {
                     Spacer()
@@ -190,7 +185,7 @@ struct ExpenseView: View {
                                     selectedExpense = expense
                                 }
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    if expense.status == .draft {
+                                    if expense.status == .draft && appState.currentUser?.accountType == .business {
                                         Button(role: .destructive) {
                                             Task { await viewModel.deleteExpense(expense.id) }
                                         } label: {
@@ -266,6 +261,10 @@ struct ExpenseView: View {
         switch filter {
         case .all:
             return viewModel.expenses.count
+        case .needsReview: return viewModel.expenses.filter(\.needsReview).count
+        case .reviewed: return viewModel.expenses.filter { $0.reviewedAt != nil }.count
+        case .draft: return viewModel.expenses.filter { $0.status == .draft }.count
+        case .reimbursed: return viewModel.expenses.filter { $0.status == .reimbursed }.count
         case .pending:
             return viewModel.expenses.filter { $0.status == .submitted }.count
         case .approved:
@@ -405,6 +404,7 @@ struct ExpenseRow: View {
                     .foregroundColor(.primary)
 
                 ExpenseStatusBadge(status: expense.status)
+                if expense.reviewedAt != nil { Text("Reviewed").font(.caption2).foregroundStyle(.green) }
             }
         }
         .padding(.vertical, 8)
@@ -455,13 +455,22 @@ struct ExpenseStatusBadge: View {
 struct ExpenseFormSheet: View {
     @EnvironmentObject private var appState: AppState
     @State private var pickingReceipt = false
+    @State private var originalPreviewURL: URL?
     @State private var receiptURL: URL?
+    @State private var receiptPreview: AIReceiptFile?
+    @State private var receiptSuggestionApplied = false
+    @State private var receiptConfirmed = false
+    @State private var receiptTask: Task<Void, Never>?
+    @State private var extractingReceipt = false
+    @State private var receiptDateMissing = false
+    @State private var savedExpenses: [Expense] = []
     @State private var uploadedReceipt: String?
     @State private var captureStarted = false
     @State private var captureAttempt = RecordAttempt()
     @Binding var isPresented: Bool
     var expense: Expense?
     var onSave: () -> Void
+    var openReceiptPicker = false
 
     @State private var description = ""
     @State private var amount = ""
@@ -485,10 +494,11 @@ struct ExpenseFormSheet: View {
 
     var isEditing: Bool { expense != nil }
 
-    init(isPresented: Binding<Bool>, expense: Expense? = nil, onSave: @escaping () -> Void) {
+    init(isPresented: Binding<Bool>, expense: Expense? = nil, openReceiptPicker: Bool = false, onSave: @escaping () -> Void) {
         self._isPresented = isPresented
         self.expense = expense
         self.onSave = onSave
+        self.openReceiptPicker = openReceiptPicker
 
         if let expense = expense {
             _description = State(initialValue: expense.description)
@@ -504,10 +514,32 @@ struct ExpenseFormSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                if !isEditing {
+                if appState.hasCapability(.submitExpenses) {
                     Section("Receipt attachment") {
-                        Button(receiptURL == nil ? "Attach Receipt" : "Receipt Selected") { pickingReceipt = true }.disabled(captureStarted)
-                        Text("JPEG, PNG, WebP or PDF · up to 10 MB. Private receipts open with a short-lived link.").font(.caption)
+                        Button(receiptURL == nil ? "Choose Receipt" : "Replace Receipt") { pickingReceipt = true }.disabled(captureStarted || extractingReceipt).accessibilityIdentifier("expense.receipt.choose")
+                        if receiptURL != nil {
+                            Button("Preview selected receipt") {
+                                do {
+                                    if let url = receiptURL { let file = try ReceiptStorage.read(url: url); let ext = file.mime == "image/jpeg" ? "jpg" : url.pathExtension.lowercased(); originalPreviewURL = try PrivateDocument.write(file.data, extension: ext, prefix: "receipt") }
+                                } catch { errorMessage = "Could not preview this receipt. Try selecting it again." }
+                            }
+                            .accessibilityIdentifier("expense.receipt.preview")
+                            Button(extractingReceipt ? "Reading receipt…" : "Read receipt with AI") { extractReceipt() }.disabled(extractingReceipt || captureStarted)
+                        }
+                        Text("Extraction sends your selected receipt to OpenAI through Amountly. Check the amount, currency, date and category against the original. Your original attaches only when you save.").font(.caption)
+                        if receiptSuggestionApplied { Toggle("I checked this draft and attachment against my receipt", isOn: $receiptConfirmed) }
+                        if extractingReceipt { ProgressView(); Button("Cancel extraction") { receiptTask?.cancel(); extractingReceipt = false } }
+                        if let preview = receiptPreview {
+                            Text(preview.summary)
+                            Text(preview.reason).font(.caption)
+                            Text("\(preview.document_type.rawValue.capitalized) · Confidence: \(preview.confidence.rawValue)").font(.caption)
+                            if preview.document_type == .receipt {
+                                Text("\(preview.merchant) · \(preview.amount.isEmpty ? "Amount missing" : preview.amount) \(preview.currency) · \(preview.expense_date.isEmpty ? "Date missing" : preview.expense_date)")
+                                Button("Apply receipt suggestion") { applyReceipt(preview) }
+                            } else { Text("This document is not a purchase receipt. Enter the details manually; no expense fields were applied.") }
+                            Button("Discard suggestion") { receiptPreview = nil }
+                        }
+                        Text("JPEG, PNG, WebP or PDF · up to 10 MB. Originals remain private.").font(.caption)
                     }
                 }
                 // Scan Receipt Button
@@ -545,6 +577,7 @@ struct ExpenseFormSheet: View {
                 // Description
                 Section("Description") {
                     TextField("What was this expense for?", text: $description)
+                        .accessibilityIdentifier("expense.description")
                 }
 
                 // Amount and Category
@@ -559,10 +592,11 @@ struct ExpenseFormSheet: View {
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 100)
+                                .accessibilityIdentifier("expense.amount")
                         }
                     }
 
-                    Picker("Currency", selection: $currency) { ForEach(RecordCoding.currencies, id: \.self) { Text($0) } }
+                    Picker("Currency", selection: $currency) { Text("Choose currency").tag(""); ForEach(RecordCoding.currencies, id: \.self) { Text($0) } }
                     Picker("Category", selection: $category) {
                         ForEach(ExpenseCategory.allCases, id: \.self) { cat in
                             Label(cat.displayName, systemImage: cat.iconName)
@@ -571,8 +605,12 @@ struct ExpenseFormSheet: View {
                     }
 
                     TextField("Merchant (optional)", text: $merchant)
+                        .accessibilityIdentifier("expense.merchant")
 
+                    if receiptDateMissing { Text("Receipt date is missing. Select the transaction date before saving.").foregroundStyle(.orange) }
                     DatePicker("Date", selection: $expenseDate, displayedComponents: .date)
+                        .onChange(of: expenseDate) { _, _ in receiptDateMissing = false }
+                    if receiptDateMissing { Button("Use selected date") { receiptDateMissing = false } }
                 }
 
                 // Project (optional)
@@ -594,6 +632,9 @@ struct ExpenseFormSheet: View {
                     }
                 }
 
+                if let duplicate = possibleDuplicate {
+                    Section("Possible duplicate") { Text("An expense for this merchant, amount, currency and date already exists: \(duplicate.description). Review before saving; this warning does not prevent saving.") }
+                }
                 // Notes
                 Section("Notes (Optional)") {
                     TextField("Additional notes", text: $notes, axis: .vertical)
@@ -623,7 +664,8 @@ struct ExpenseFormSheet: View {
                     Button(isEditing ? "Save" : "Add") {
                         Task { await saveExpense() }
                     }
-                    .disabled(description.isEmpty || amount.isEmpty || isSaving)
+                    .accessibilityIdentifier("expense.save")
+                    .disabled(description.isEmpty || amount.isEmpty || currency.isEmpty || receiptDateMissing || isSaving || extractingReceipt || (receiptSuggestionApplied && !receiptConfirmed))
                 }
             }
             .overlay {
@@ -632,17 +674,46 @@ struct ExpenseFormSheet: View {
                 }
             }
             .task {
+                if openReceiptPicker { pickingReceipt = true }
                 currency = expense?.currency ?? appState.currentUser?.reportingCurrency ?? "USD"
                 await loadProjects()
+                savedExpenses = (try? await expenseRepository.fetchExpenses()) ?? []
             }
+            .quickLookPreview($originalPreviewURL)
+            .onDisappear { receiptTask?.cancel() }
+            .onChange(of: originalPreviewURL) { previous, current in if previous != current, let url = previous { try? FileManager.default.removeItem(at: url) } }
+            .onChange(of: appState.currentUser?.id) { _, _ in receiptTask?.cancel(); receiptPreview = nil; isPresented = false }
             .fileImporter(isPresented: $pickingReceipt, allowedContentTypes: [.jpeg, .png, .webP, .pdf]) { result in
-                do { receiptURL = try result.get() } catch { errorMessage = "Could not select the receipt." }
+                do { receiptTask?.cancel(); receiptPreview = nil; receiptURL = try result.get(); uploadedReceipt = nil; receiptConfirmed = false; if openReceiptPicker { extractReceipt() } } catch { errorMessage = "Could not select the receipt." }
             }
             .sheet(isPresented: $showingScanner) {
                 ReceiptScannerView(onScanComplete: { receiptText = $0 }, onError: { errorMessage = $0 })
                 .withAppTheme()
             }
         }
+    }
+
+    private var possibleDuplicate: Expense? {
+        func normalized(_ value: String) -> String { value.precomposedStringWithCompatibilityMapping.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ") }
+        guard let value = Double(amount), value > 0, !normalized(merchant).isEmpty, !receiptDateMissing else { return nil }
+        return savedExpenses.first { $0.id != expense?.id && RecordCoding.money($0.amount) == RecordCoding.money(value) && $0.currency == currency && RecordCoding.day($0.expenseDate) == RecordCoding.day(expenseDate) && normalized($0.merchant ?? "") == normalized(merchant) }
+    }
+    private func extractReceipt() {
+        guard !extractingReceipt, let url = receiptURL else { return }
+        receiptPreview = nil; errorMessage = nil; extractingReceipt = true; receiptConfirmed = false; receiptSuggestionApplied = false
+        receiptTask = Task { @MainActor in
+            defer { extractingReceipt = false }
+            do { let result = try await ReceiptCaptureService.capture(url: url); try Task.checkCancellation(); receiptPreview = result }
+            catch is CancellationError {} catch { if !Task.isCancelled { errorMessage = "Could not read this receipt. Try again or enter the details manually." } }
+        }
+    }
+    private func applyReceipt(_ result: AIReceiptFile) {
+        guard result.document_type == .receipt else { return }
+        amount = result.amount; currency = result.supportedCurrency; merchant = result.merchant; description = result.description
+        category = ExpenseCategory(rawValue: result.category.rawValue) ?? .other
+        receiptDateMissing = AIValidation.date(result.expense_date) == nil
+        if let date = AIValidation.date(result.expense_date) { expenseDate = date }
+        receiptPreview = nil; receiptSuggestionApplied = true; receiptConfirmed = false
     }
 
     private func applyExpense(_ result: AIExpense) {
@@ -664,7 +735,7 @@ struct ExpenseFormSheet: View {
     }
 
     private func saveExpense() async {
-        guard let amountValue = Double(amount), amountValue > 0 else {
+        guard !receiptDateMissing, (!receiptSuggestionApplied || receiptConfirmed), RecordCoding.currencies.contains(currency), let amountValue = Double(amount), amountValue > 0 else {
             errorMessage = "Please enter a valid amount"
             return
         }
@@ -687,7 +758,7 @@ struct ExpenseFormSheet: View {
                     projectId: selectedProjectId,
                     notes: notes.isEmpty ? nil : notes,
                     status: existingExpense.status.rawValue,
-                    expectedVersion: existingExpense.version
+                    expectedVersion: existingExpense.version, receiptPath: uploadedReceipt
                 )
             } else {
                 _ = try await expenseRepository.createExpense(
@@ -716,7 +787,10 @@ struct ExpenseFormSheet: View {
 // MARK: - Expense Detail Sheet
 
 struct ExpenseDetailSheet: View {
-    @Environment(\.openURL) private var openURL
+    @State private var receiptDocument: ReceiptDocument?
+    @State private var reviewConfirmation = false
+    @State private var showingEdit = false
+    private struct ReceiptDocument: Identifiable { let id = UUID(); let url: URL }
     let expense: Expense
     var onUpdate: () -> Void
 
@@ -731,6 +805,12 @@ struct ExpenseDetailSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
+                    if appState.currentUser?.accountType == .freelancer && appState.currentUser?.organizationId == nil && expense.userId == appState.currentUser?.id && [.draft, .rejected].contains(expense.status) {
+                        Text(expense.reviewedAt == nil ? "Needs review" : "Reviewed").font(.headline)
+                        Button(expense.reviewedAt == nil ? "Mark reviewed" : "Clear review") { reviewConfirmation = true }.disabled(isUpdating)
+                        Text("Review the saved amount, currency, date, category and receipt. Editing the expense clears its review.").font(.caption)
+                    }
+                    if expense.userId == appState.currentUser?.id && [.draft, .rejected].contains(expense.status) { Button("Edit expense") { showingEdit = true } }
                     // Amount Header
                     VStack(spacing: 8) {
                         Text(expense.amountFormatted)
@@ -738,6 +818,7 @@ struct ExpenseDetailSheet: View {
                             .foregroundColor(.primary)
 
                         ExpenseStatusBadge(status: expense.status)
+                        if expense.reviewedAt != nil { Text("Reviewed").font(.caption2).foregroundStyle(.green) }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
@@ -773,7 +854,7 @@ struct ExpenseDetailSheet: View {
 
                         if expense.hasReceipt {
                             Button("Open Receipt") { Task {
-                                do { let url = try await ReceiptStorage().signedURL(for: expense); openURL(url) }
+                                do { let url = try await ReceiptStorage().signedURL(for: expense); receiptDocument = ReceiptDocument(url: url) }
                                 catch { errorMessage = "Could not open the receipt. Check access and try again." }
                             } }
                             Divider()
@@ -797,7 +878,7 @@ struct ExpenseDetailSheet: View {
 
                     // Action Buttons
                     VStack(spacing: 12) {
-                        if expense.status == .draft {
+                        if expense.status == .draft && appState.currentUser?.accountType == .business {
                             Button(action: { Task { await submitExpense() } }) {
                                 HStack {
                                     Image(systemName: "paperplane.fill")
@@ -892,7 +973,19 @@ struct ExpenseDetailSheet: View {
                 }
             }
         }
+        .sheet(item: $receiptDocument, onDismiss: { PrivateDocument.removeAll() }) { document in ShareSheet(activityItems: [document.url]) }
+        .sheet(isPresented: $showingEdit) { ExpenseFormSheet(isPresented: $showingEdit, expense: expense) { onUpdate(); dismiss() } }
+        .confirmationDialog(expense.reviewedAt == nil ? "Mark expense reviewed?" : "Clear expense review?", isPresented: $reviewConfirmation, titleVisibility: .visible) {
+            Button("Confirm") { Task { await setReviewed() } }
+        } message: { Text("Check the saved details and receipt. This action is recorded in the expense history.") }
     }
+    private func setReviewed() async {
+        guard !isUpdating else { return }; isUpdating = true; defer { isUpdating = false }
+        do { try await expenseRepository.setReviewed(expense, reviewed: expense.reviewedAt == nil); onUpdate(); dismiss() }
+        catch { errorMessage = RecordError.safe(error).localizedDescription }
+    }
+
+
 
     private func submitExpense() async {
         isUpdating = true
@@ -950,30 +1043,7 @@ struct ExpenseViewContent: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                // Summary Cards
-                HStack(spacing: 12) {
-                    ExpenseSummaryCard(
-                        title: "Total",
-                        value: viewModel.totalExpenses.formatted(.currency(code: appState.currentUser?.reportingCurrency ?? "USD")),
-                        icon: "dollarsign.circle",
-                        color: .blue
-                    )
-
-                    ExpenseSummaryCard(
-                        title: "Pending",
-                        value: "\(viewModel.pendingCount)",
-                        icon: "clock",
-                        color: .orange
-                    )
-
-                    ExpenseSummaryCard(
-                        title: "Approved",
-                        value: viewModel.approvedTotal.formatted(.currency(code: appState.currentUser?.reportingCurrency ?? "USD")),
-                        icon: "checkmark.circle",
-                        color: .green
-                    )
-                }
-                .padding(.horizontal)
+                ExpenseWorkspaceSummary(expenses: viewModel.expenses)
 
                 // Filter Pills
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -991,6 +1061,7 @@ struct ExpenseViewContent: View {
                     .padding(.horizontal)
                 }
 
+                ExpenseListFilters(viewModel: viewModel)
                 // Expenses List
                 if viewModel.isLoading {
                     ProgressView()
@@ -1028,6 +1099,10 @@ struct ExpenseViewContent: View {
         switch filter {
         case .all:
             return viewModel.expenses.count
+        case .needsReview: return viewModel.expenses.filter(\.needsReview).count
+        case .reviewed: return viewModel.expenses.filter { $0.reviewedAt != nil }.count
+        case .draft: return viewModel.expenses.filter { $0.status == .draft }.count
+        case .reimbursed: return viewModel.expenses.filter { $0.status == .reimbursed }.count
         case .pending:
             return viewModel.expenses.filter { $0.status == .submitted }.count
         case .approved:
@@ -1102,6 +1177,7 @@ private struct ExpenseCardRow: View {
                     .foregroundColor(.primary)
 
                 ExpenseStatusBadge(status: expense.status)
+                if expense.reviewedAt != nil { Text("Reviewed").font(.caption2).foregroundStyle(.green) }
             }
         }
         .padding()

@@ -37,8 +37,8 @@ class SignUpViewModel: ObservableObject {
             return
         }
 
-        guard password.count >= 6 else {
-            errorMessage = "Password must be at least 6 characters"
+        guard password.count >= 12 && password.count <= 128 else {
+            errorMessage = "Password must be between 12 and 128 characters"
             return
         }
 
@@ -51,13 +51,10 @@ class SignUpViewModel: ObservableObject {
         errorMessage = nil
 
         do {
-            print("🔐 SignUpViewModel: Starting signup for \(email)")
             try await authService.signUp(email: email, password: password, name: name)
-            print("✅ SignUpViewModel: Signup successful, proceeding to onboarding")
             signUpSuccess = true
         } catch {
-            print("❌ SignUpViewModel: Signup failed with error: \(error)")
-            errorMessage = error.localizedDescription
+            errorMessage = "Could not create your account. Check your details and try again."
         }
 
         isLoading = false
@@ -86,7 +83,7 @@ struct SignUpView: View {
                             .font(.alphaDisplayLarge)
                             .foregroundColor(.alphaPrimaryText)
 
-                        Text("Start tracking your time")
+                        Text("Keep client invoices and expenses together")
                             .font(.alphaBody)
                             .foregroundColor(.alphaSecondaryText)
                     }
@@ -145,7 +142,7 @@ struct SignUpView: View {
 
                             AlphaTextField(
                                 text: $viewModel.password,
-                                placeholder: "Minimum 6 characters",
+                                placeholder: "Minimum 12 characters",
                                 textContentType: .newPassword,
                                 isSecure: true
                             )
@@ -230,7 +227,7 @@ struct SignUpView: View {
             }
         }
         .fullScreenCover(isPresented: $viewModel.signUpSuccess) {
-            AccountTypeSelectionView(email: viewModel.email, userName: viewModel.name)
+            EmailVerificationView(email: viewModel.email, userName: viewModel.name)
                 .environmentObject(appState)
         }
     }
@@ -239,7 +236,7 @@ struct SignUpView: View {
         !viewModel.name.isEmpty &&
         !viewModel.email.isEmpty &&
         !viewModel.password.isEmpty &&
-        viewModel.password.count >= 6 &&
+        viewModel.password.count >= 12 && viewModel.password.count <= 128 &&
         viewModel.password == viewModel.confirmPassword
     }
 }

@@ -15,6 +15,10 @@ struct AppCoordinator: View {
             if appState.isLoading {
                 // Loading screen
                 LoadingView()
+            } else if appState.needsSoloSetup {
+                AccountTypeSelectionView(email: appState.setupEmail, userName: appState.setupName)
+            } else if appState.needsOrganizationSetup {
+                OnboardingView(userName: appState.setupName)
             } else if appState.isAuthenticated {
                 // Main app (will create this in Phase 3)
                 MainTabView()

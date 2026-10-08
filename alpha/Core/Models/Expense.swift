@@ -103,6 +103,8 @@ struct Expense: Codable, Identifiable {
 
     var version: String? = nil
     var receiptPath: String? = nil
+    var reviewedAt: Date? = nil
+    var needsReview: Bool { reviewedAt == nil && [.draft, .rejected].contains(status) }
 
     // Populated by backend joins
     let project: Project?
@@ -122,6 +124,7 @@ struct Expense: Codable, Identifiable {
         case expenseDate = "expense_date"
         case receiptUrl = "receipt_url"
         case receiptPath = "receipt_path"
+        case reviewedAt = "reviewed_at"
         case status
         case notes
         case invoiceId = "invoice_id"

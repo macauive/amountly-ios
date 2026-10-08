@@ -37,9 +37,12 @@ class ExpenseRepository {
         try await attempt.perform("create_money_record", params: ["p_kind": .string("expenses"), "p_id": .string(attempt.id), "p_data": .object(data)])
         return try await fetchExpense(id: attempt.id)
     }
-    func updateExpense(id: String, description: String, amount: Double, currency: String, category: String, merchant: String?, expenseDate: Date, projectId: String?, notes: String?, status: String, expectedVersion: String?) async throws -> Expense {
+    func updateExpense(id: String, description: String, amount: Double, currency: String, category: String, merchant: String?, expenseDate: Date, projectId: String?, notes: String?, status: String, expectedVersion: String?, receiptPath: String? = nil) async throws -> Expense {
         guard let expectedVersion else { throw RecordError.conflict }
-        let data = try fields(description: description, amount: amount, currency: currency, category: category, merchant: merchant, expenseDate: expenseDate, projectId: projectId, notes: notes)
+        var data = try fields(description: description, amount: amount, currency: currency, category: category, merchant: merchant, expenseDate: expenseDate, projectId: projectId, notes: notes)
+        guard ["DRAFT", "REJECTED"].contains(status) else { throw RecordError.invalid }
+        data["status"] = .string("DRAFT")
+        if let receiptPath { guard ReceiptStorage.validPath(receiptPath) else { throw RecordError.invalid }; data["receipt_path"] = .string(receiptPath) }
         do {
             let response = try await supabase.from("expenses").update(data).eq("id", value: id).eq("updated_at", value: expectedVersion).select().single().execute()
             NotificationCenter.default.post(name: .recordsChanged, object: nil)
@@ -61,4 +64,15 @@ class ExpenseRepository {
             NotificationCenter.default.post(name: .recordsChanged, object: nil)
         } catch { throw RecordError.safe(error) }
     }
+    func setReviewed(_ expense: Expense, reviewed: Bool) async throws {
+        let scope = try await OwnershipResolver().currentScope()
+        let user = try await AuthService.shared.getCurrentUser()
+        guard user.accountType == .freelancer, user.organizationId == nil, expense.userId.lowercased() == scope.userId.lowercased(),
+              [.draft, .rejected].contains(expense.status), UUID(uuidString: expense.id) != nil, let version = expense.version else { throw RecordError.invalid }
+        do {
+            try await supabase.rpc("set_expense_review", params: ["p_id": AnyJSON.string(expense.id), "p_reviewed": .bool(reviewed), "p_expected_updated_at": .string(version)]).execute()
+            NotificationCenter.default.post(name: .recordsChanged, object: nil)
+        } catch { throw RecordError.safe(error) }
+    }
+
 }
