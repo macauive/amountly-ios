@@ -20,7 +20,8 @@ class ExpenseRepository {
         }
     }
     func fetchExpense(id: String) async throws -> Expense {
-        let data = try await supabase.from("expenses").select("*,project:projects(*)").eq("id", value: id).execute().data
+        guard UUID(uuidString: id) != nil else { throw RecordError.invalid }
+        let data = try await supabase.from("expenses").select("*,project:projects(*)").eq("id", value: id).is("archived_at", value: nil).execute().data
         guard let row = try decode(data).first else { throw RecordError.conflict }; return row
     }
     private func fields(description: String, amount: Double, currency: String, category: String, merchant: String?, expenseDate: Date, projectId: String?, notes: String?) throws -> [String: AnyJSON] {

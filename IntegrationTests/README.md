@@ -1,5 +1,43 @@
 # Native verification
 
+## October 13 web refresh checks
+
+The current Swift package includes UTC financial dates, shared record filters,
+private capture contracts and request-suspension tests. `WebRefreshParityTests`
+is selected by `scripts/run-offline-tests.py` alongside the existing mocked
+Render and native AI cases (20 tests total). It checks the native multipart API,
+revisioned originals/discards, malformed replies and session lifecycle. PDF
+rendering tests check distinct pages and reject invalid or excessive page counts.
+
+`CaptureLiveTests/testLiveCrossClientCaptureResumptionAndConflict` is separately
+opted in with `AMOUNTLY_CAPTURE_LIVE_TESTING=1`, dedicated freelancer QA credentials
+and `AMOUNTLY_FREELANCER_QA_ID`. It only saves/removes synthetic private captures;
+no expense or AI request is made. The second independent native session restores
+its fields/original, and stale revisions and identical retries are verified.
+
+`CaptureLiveTests/testPrepareCaptureUI` additionally requires
+`AMOUNTLY_CAPTURE_QA_UI=prepare`. It persists a normal cookie in the simulator
+Keychain and writes synthetic capture metadata to `Documents/qa-capture-ui.json`.
+`WebParityUITests/testResumeReviewedCaptureSaveAndFindExactOriginal` requires
+`AMOUNTLY_CAPTURE_UI_TESTING=1` and that capture UUID as `AMOUNTLY_CAPTURE_QA_ID`.
+This UI case saves one synthetic QA expense through the real app, opens its exact
+record from search and views its original. Run only after explicit hosted QA
+write and native UI authorization. It never requests AI or sends a share.
+
+`WebParityUITests/testKeepEditedCaptureCancelDiscardAndConfirmDiscard` uses the
+same preparation and UI flags. It keeps a changed amount, restores that value
+without granting review acknowledgment, cancels discard and finally confirms
+discard. Finish with `AMOUNTLY_CAPTURE_UI_DISCARDED=1` instead of the saved flag;
+the cleanup oracle verifies that the draft is gone and no expense exists for its
+UUID. It makes no AI request and creates no financial record.
+
+Finish with only `CaptureLiveTests/testCleanupCaptureUI`,
+`AMOUNTLY_CAPTURE_QA_UI=cleanup` and `AMOUNTLY_CAPTURE_UI_SAVED=1` after successful
+UI save. The oracle checks the captured UUID, saved fields, original bytes and
+removed private capture, removes preparation files and signs out. Credentials
+must come from an owner-only local source into a temporary owner-only `.xctestrun`,
+never shell history, source or logs. Always delete the generated run configuration.
+
 ## Current Render alignment (October 7, 2026)
 
 Production uses the web's cookie-authenticated Render APIs. The loopback Supabase
@@ -248,7 +286,9 @@ python3 scripts/run-integration-tests.py --inspect-ai-forms \
   --device SIMULATOR_UUID
 ```
 
-The screen waits up to 15 minutes for computer-use/manual actions. Use Fail once
+The screen waits up to 15 minutes for computer-use/manual actions. Read the AI
+disclosure and select Allow AI for this session in the first form; the local
+synthetic AI client still requires the form's explicit permission. Use Fail once
 for the expense form, request twice, apply and save. Use Slow for the contact form,
 request then dismiss while generating. Switch to Success, reopen contact, request,
 apply and save. Finally create an invoice for AI Form Verification Studio using
@@ -256,3 +296,32 @@ the suggested line, then tap Finish verification. The XCTest checks the three
 saved records and failure/cancellation counters. These are local synthetic writes
 only; the opt-in run never calls the hosted AI endpoint. Physical camera capture
 and device share destinations remain outside simulator coverage.
+
+## App Store readiness UI checks
+
+`ReleaseReadinessUITests` uses a Debug-only synthetic settings fixture. All
+requests are intercepted locally, including the account-deletion confirmation;
+no hosted account, AI request, message, or real deletion is involved. The fixture
+and its transport are excluded from Release builds.
+
+Run the suite on an available iPhone and iPad simulator destination:
+
+```sh
+xcodebuild -project alpha.xcodeproj -scheme AmountlyUI \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
+  -only-testing:AmountlyUITests/ReleaseReadinessUITests \
+  -parallel-testing-enabled NO test CODE_SIGNING_ALLOWED=NO
+```
+
+The app bundle ID is `macdigital.amountly`. The suite verifies privacy/support
+links, hidden placeholders, explicit AI permission and withdrawal, permission
+reset on relaunch, deletion cancellation, the 30-day disclosure, and the recorded
+request confirmation. Security tests in `ReleasePrivacyTests` separately verify
+network blocking, session ownership, withdrawal during requests, authenticated
+deletion input, response validation, and denied/error responses.
+
+Build the UI and integration schemes in separate DerivedData directories, or
+rebuild the integration scheme immediately before hosted integration tests.
+Building the UI host can replace the app bundle and remove its embedded
+integration-test plug-in. The runners accept both arm64-only and universal
+arm64/x86_64 test configurations.

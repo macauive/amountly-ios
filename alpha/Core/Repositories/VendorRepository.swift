@@ -15,12 +15,14 @@ struct VendorBill: Decodable, Identifiable {
     let total: Double
     let currency: String?
     let updated_at: String
+    let notes: String?
     var isOpen: Bool { status != .paid && status != .cancelled }
     var displayStatus: BillStatus {
         guard isOpen else { return status }
         let today = RecordCoding.day(Date())
-        if due_date < today { return .overdue }
-        return due_date == today ? .due : .upcoming
+        let due = RecordCoding.calendarDay(due_date)
+        if due < today { return .overdue }
+        return due == today ? .due : .upcoming
     }
 }
 final class VendorRepository {

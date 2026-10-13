@@ -8,7 +8,7 @@ final class ReceiptWorkflowUITests: XCTestCase {
     private var fixture: [String: Any] = [:]
     private var actor: [String: String] = [:]
     private var token = ""
-    private let app = XCUIApplication(bundleIdentifier: "macaulay.alpha")
+    private let app = XCUIApplication(bundleIdentifier: "macdigital.amountly")
 
     override func setUpWithError() throws {
         continueAfterFailure = false

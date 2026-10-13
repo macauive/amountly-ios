@@ -16,6 +16,23 @@ final class PlatformProtocol: URLProtocol, @unchecked Sendable {
 }
 @MainActor
 final class TransportTests: XCTestCase {
+    func testSuspensionRejectsLateResponsesWithoutDiscardingSession() async throws {
+        let api = transport(), started = XCTestExpectation(description: "Request started")
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        PlatformProtocol.handler = { _ in
+            started.fulfill(); _ = gate.wait(timeout: .now() + 5)
+            return (200, ["Content-Type":"application/json"], Data("[]".utf8))
+        }
+        let generation = api.generation
+        let request = Task { try await api.request(path: "/api/data/expenses") }
+        let result = await XCTWaiter.fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(result, .completed)
+        api.invalidatePending(); gate.signal()
+        do { _ = try await request.value; XCTFail("Suspended request restored private records") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(api.generation, generation)
+    }
     func transport(load: @escaping () throws -> Data? = { nil }, save: @escaping (Data?) throws -> Void = { _ in }) -> AmountlyTransport {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [PlatformProtocol.self]
         return AmountlyTransport(configuration: config, load: load, save: save)

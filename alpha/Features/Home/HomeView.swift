@@ -59,26 +59,8 @@ struct HomeView: View {
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                         }
                         DashboardAI(input: aiInput, currency: currency, navigate: onFinancialSearchDestination).id(appState.currentUser?.id)
-                        GroupBox("Financial Search") {
-                            VStack(alignment: .leading, spacing: 10) {
-                                TextField("Search invoices, expenses, bills…", text: $search).textFieldStyle(.roundedBorder)
-                                if !search.isEmpty {
-                                    ForEach(invoices.filter { $0.invoiceNumber.localizedCaseInsensitiveContains(search) || ($0.displayClientName?.localizedCaseInsensitiveContains(search) ?? false) }.prefix(5)) { row in
-                                        Button("\(row.invoiceNumber) · \(row.totalFormatted)") { onFinancialSearchDestination(.invoices) }
-                                    }
-                                    ForEach(expenses.filter { $0.description.localizedCaseInsensitiveContains(search) || ($0.merchant?.localizedCaseInsensitiveContains(search) ?? false) || (search.lowercased().contains("receipt") && !$0.hasReceipt) }.prefix(5)) { row in
-                                        Button("\(row.description) · \(row.amountFormatted)") { selectedExpense = row }
-                                    }
-                                    ForEach(bills.filter { $0.name.localizedCaseInsensitiveContains(search) || $0.payee.localizedCaseInsensitiveContains(search) || (search.lowercased().contains("overdue") && $0.isOverdue) }.prefix(5)) { row in
-                                        Button("\(row.name) · \(row.amountFormatted)") { onFinancialSearchDestination(.bills) }
-                                    }
-                                    ForEach(vendorBills.filter { $0.bill_number.localizedCaseInsensitiveContains(search) || ($0.vendor?.name.localizedCaseInsensitiveContains(search) ?? false) }.prefix(5)) { row in
-                                        Button(row.bill_number) { onFinancialSearchDestination(.bills) }
-                                    }
-                                    if search.lowercased().contains("tax") { Button("Open Tax Prep") { onFinancialSearchDestination(.taxPrep) } }
-                                }
-                            }.padding(.top, 8)
-                        }
+                        NavigationLink("Find financial records", destination: RecordSearchView(query: search))
+
                     }
                     GroupBox("Quick Actions") {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {

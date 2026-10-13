@@ -1,7 +1,7 @@
 import Foundation
 
 nonisolated enum PlatformError: LocalizedError, Equatable {
-    case input, signIn, denied, unavailable, response, tooLarge, busy
+    case input, signIn, denied, unavailable, response, tooLarge, busy, consent
     var errorDescription: String? {
         switch self {
         case .input: "Check your details and try again."
@@ -11,6 +11,7 @@ nonisolated enum PlatformError: LocalizedError, Equatable {
         case .response: "Amountly returned an unexpected response. Try again."
         case .tooLarge: "This file or packet is too large. Choose a smaller file or date range."
         case .busy: "The service is busy. Try again shortly."
+        case .consent: "Allow AI data sharing before using this optional feature."
         }
     }
 }
@@ -22,11 +23,16 @@ final class AmountlyTransport {
     static let origin = URL(string: "https://amountly.app")!
     private let session: URLSession
     private let save: (Data?) throws -> Void
+    private let aiConsent: AIConsentStore
     private var cookie: HTTPCookie?
     private(set) var generation = UUID()
+    private var requestEpoch = UUID()
+    func invalidatePending() { requestEpoch = UUID() }
     init(configuration: URLSessionConfiguration = .ephemeral,
-         load: @escaping () throws -> Data? = { nil }, save: @escaping (Data?) throws -> Void = { _ in }) {
+         load: @escaping () throws -> Data? = { nil }, save: @escaping (Data?) throws -> Void = { _ in },
+         aiConsent: AIConsentStore? = nil) {
         self.save = save
+        self.aiConsent = aiConsent ?? .shared
         configuration.httpCookieStorage = nil; configuration.httpShouldSetCookies = false
         configuration.urlCache = nil; configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 65; configuration.timeoutIntervalForResource = 75
@@ -42,7 +48,7 @@ final class AmountlyTransport {
     static func validCookieValue(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 8192 && value.utf8.allSatisfy { $0 > 32 && $0 < 127 && $0 != 59 && $0 != 44 && $0 != 34 && $0 != 92 }
     }
-    func clear() throws { generation = UUID(); cookie = nil; try save(nil) }
+    func clear() throws { generation = UUID(); cookie = nil; aiConsent.revoke(); try save(nil) }
     func cookieHeader() throws -> String {
         guard let cookie, cookie.expiresDate.map({ $0 > Date() }) == true else { throw PlatformError.signIn }
         return "\(cookie.name)=\(cookie.value)"
@@ -62,10 +68,15 @@ final class AmountlyTransport {
         request.setValue(Self.origin.absoluteString, forHTTPHeaderField: "Origin")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
         let expectedGeneration = generation
+        let expectedEpoch = requestEpoch
+        let isAIRequest = url.path == "/api/ai" || url.path.hasPrefix("/api/ai/")
+        let authorization = isAIRequest ? try aiConsent.authorization(sessionGeneration: expectedGeneration) : nil
         do {
             let (data, http) = try await Self.read(session: session, request: request, limit: limit)
             try Task.checkCancellation()
             guard generation == expectedGeneration else { throw PlatformError.signIn }
+            guard requestEpoch == expectedEpoch else { throw CancellationError() }
+            if let authorization { try aiConsent.validate(authorization, sessionGeneration: generation) }
             if let raw = http.value(forHTTPHeaderField: "Set-Cookie") {
                 for candidate in HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": raw], for: url)
                 where candidate.name == "__Secure-amountly.session_token" {

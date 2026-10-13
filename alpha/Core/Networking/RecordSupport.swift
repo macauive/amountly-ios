@@ -19,8 +19,8 @@ struct RecordError: LocalizedError {
 // Keeps the exact original payload and ID after an uncertain network outcome.
 // The form must be reopened to start a different request.
 final class RecordAttempt {
-    nonisolated let id = UUID().uuidString.lowercased()
-    nonisolated init() {}
+    nonisolated let id: String
+    nonisolated init(id: UUID = UUID()) { self.id = id.uuidString.lowercased() }
     private var params: [String: AnyJSON]?
     private var uncertain = false
     private var confirmed = false

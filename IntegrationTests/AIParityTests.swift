@@ -44,9 +44,13 @@ final class AIParityTests: XCTestCase {
         let email = try XCTUnwrap(env["AMOUNTLY_AI_QA_EMAIL"])
         let password = try XCTUnwrap(env["AMOUNTLY_AI_QA_PASSWORD"])
         // A private in-memory Render session never replaces the user's app login.
-        let transport = AmountlyTransport()
+        let consent = AIConsentStore()
+        let transport = AmountlyTransport(aiConsent: consent)
         let client = AmountlyDataClient(transport: transport)
-        do { _ = try await client.auth.signIn(email: email, password: password) }
+        do {
+            let actor = try await client.auth.signIn(email: email, password: password)
+            consent.allow(userID: actor.user.id.uuidString, sessionGeneration: transport.generation)
+        }
         catch { XCTFail("QA sign-in failed; no AI request was sent."); return }
         let api = AIClient(transport: { request in try await transport.send(request, limit: 256000) }) {
             let session = try await client.auth.session

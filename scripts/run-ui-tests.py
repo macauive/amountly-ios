@@ -21,7 +21,7 @@ fixture = json.loads(fixture_file.read_text())
 if fixture.get('url') != 'http://127.0.0.1:54321':
     raise SystemExit('Refusing non-local fixture configuration.')
 products = Path(args.products).resolve()
-source = sorted(products.glob('AmountlyUI_*-arm64.xctestrun'))[-1]
+source = sorted(products.glob('AmountlyUI_*-arm64*.xctestrun'))[-1]
 config = plistlib.loads(source.read_bytes())
 for name, target in config.items():
     if name.startswith('__'):
@@ -35,7 +35,7 @@ for name, target in config.items():
 # Fixture setup, before UI automation: place only the generated synthetic PNG
 # in Files. No personal files or production receipt bytes are copied.
 container = Path(subprocess.check_output([
-    'xcrun', 'simctl', 'get_app_container', args.device, 'macaulay.alpha', 'data',
+    'xcrun', 'simctl', 'get_app_container', args.device, 'macdigital.amountly', 'data',
 ], text=True).strip())
 source_image = container / 'Documents/qa-synthetic-receipt.png'
 if not source_image.is_file():

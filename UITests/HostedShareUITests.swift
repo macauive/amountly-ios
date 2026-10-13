@@ -4,7 +4,7 @@ import XCTest
 // opens share destinations and cancels before saving or sending anything.
 @MainActor
 final class HostedShareUITests: XCTestCase {
-    private let app = XCUIApplication(bundleIdentifier: "macaulay.alpha")
+    private let app = XCUIApplication(bundleIdentifier: "macdigital.amountly")
     private enum Failure: Error { case element }
     private func require(_ element: XCUIElement) throws {
         guard element.waitForExistence(timeout: 15) else { throw Failure.element }

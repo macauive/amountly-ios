@@ -170,6 +170,7 @@ struct ExpenseView: View {
                 .padding(.bottom, 12)
 
                 ExpenseListFilters(viewModel: viewModel)
+                NavigationLink("Continue a capture", destination: CaptureDraftsView()).padding(.horizontal)
                 // Expenses List
                 if viewModel.isLoading {
                     Spacer()
@@ -454,6 +455,7 @@ struct ExpenseStatusBadge: View {
 
 struct ExpenseFormSheet: View {
     @EnvironmentObject private var appState: AppState
+    @ObservedObject private var aiConsent = AIConsentStore.shared
     @State private var pickingReceipt = false
     @State private var originalPreviewURL: URL?
     @State private var receiptURL: URL?
@@ -471,6 +473,19 @@ struct ExpenseFormSheet: View {
     var expense: Expense?
     var onSave: () -> Void
     var openReceiptPicker = false
+    var capture: CaptureDraft?
+    @State private var activeCapture: CaptureDraft?
+    @State private var captureID = UUID()
+    @State private var captureMethod: CaptureMethod = .file
+    @State private var captureExtraction: AIReceiptFile?
+    @State private var captureExtracted = false
+    @State private var keepingCapture = false
+    @State private var restoringCapture = false
+    @State private var alreadySavedCapture = false
+    @State private var captureFileName: String?
+    @State private var pendingKeep: KeepAttempt?
+    @State private var initialized = false
+    private struct KeepAttempt { let id: UUID; let revision: Int; let payload: CapturePayload; let file: URL?; let filename: String? }
 
     @State private var description = ""
     @State private var amount = ""
@@ -494,11 +509,12 @@ struct ExpenseFormSheet: View {
 
     var isEditing: Bool { expense != nil }
 
-    init(isPresented: Binding<Bool>, expense: Expense? = nil, openReceiptPicker: Bool = false, onSave: @escaping () -> Void) {
+    init(isPresented: Binding<Bool>, expense: Expense? = nil, openReceiptPicker: Bool = false, capture: CaptureDraft? = nil, onSave: @escaping () -> Void) {
         self._isPresented = isPresented
         self.expense = expense
         self.onSave = onSave
         self.openReceiptPicker = openReceiptPicker
+        self.capture = capture
 
         if let expense = expense {
             _description = State(initialValue: expense.description)
@@ -514,8 +530,20 @@ struct ExpenseFormSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                if appState.hasCapability(.submitExpenses) {
+                if restoringCapture { ProgressView("Restoring capture…") }
+                if !isEditing {
+                    Section("Capture method") {
+                        Picker("Start with", selection: $captureMethod) {
+                            Text("Receipt file").tag(CaptureMethod.file); Text("Receipt text").tag(CaptureMethod.text); Text("Manual").tag(CaptureMethod.manual)
+                        }.pickerStyle(.segmented)
+                        Button(keepingCapture ? "Keeping…" : pendingKeep == nil ? "Keep for later" : "Retry keeping original capture") { Task { await keepForLater() } }
+                            .disabled(isSaving || keepingCapture || extractingReceipt || captureStarted || restoringCapture || alreadySavedCapture)
+                        Text("Stores the draft and selected original privately in Amountly. No AI processing or expense is recorded.").font(.caption)
+                    }
+                }
+                if appState.hasCapability(.submitExpenses) && (isEditing || captureMethod == .file) {
                     Section("Receipt attachment") {
+                        AIConsentControl()
                         Button(receiptURL == nil ? "Choose Receipt" : "Replace Receipt") { pickingReceipt = true }.disabled(captureStarted || extractingReceipt).accessibilityIdentifier("expense.receipt.choose")
                         if receiptURL != nil {
                             Button("Preview selected receipt") {
@@ -524,10 +552,9 @@ struct ExpenseFormSheet: View {
                                 } catch { errorMessage = "Could not preview this receipt. Try selecting it again." }
                             }
                             .accessibilityIdentifier("expense.receipt.preview")
-                            Button(extractingReceipt ? "Reading receipt…" : "Read receipt with AI") { extractReceipt() }.disabled(extractingReceipt || captureStarted)
+                            Button(extractingReceipt ? "Reading receipt…" : "Read receipt with AI") { extractReceipt() }.disabled(extractingReceipt || captureStarted || !canUseAI)
                         }
                         Text("Extraction sends your selected receipt to OpenAI through Amountly. Check the amount, currency, date and category against the original. Your original attaches only when you save.").font(.caption)
-                        if receiptSuggestionApplied { Toggle("I checked this draft and attachment against my receipt", isOn: $receiptConfirmed) }
                         if extractingReceipt { ProgressView(); Button("Cancel extraction") { receiptTask?.cancel(); extractingReceipt = false } }
                         if let preview = receiptPreview {
                             Text(preview.summary)
@@ -568,10 +595,24 @@ struct ExpenseFormSheet: View {
                     }
                 }
 
+                if isEditing || captureMethod == .text {
                 AICaptureSection<AIExpense>(title: "Smart expense capture", text: $smartCaptureText, task: .expense, apply: applyExpense)
                 AICaptureSection<AIReceipt>(title: "Receipt/document extraction", text: $receiptText, task: .receipt) { result in
                     applyExpense(result.expense)
                     if !result.notes.isEmpty { notes = result.notes }
+                    captureExtracted = true; captureExtraction = nil
+                    receiptSuggestionApplied = true; receiptConfirmed = false
+                }
+                }
+                if receiptSuggestionApplied {
+                    Section("Review extracted proposal") {
+                        Toggle("I checked this draft and attachment against my receipt", isOn: $receiptConfirmed)
+                    }
+                }
+                if captureMethod != .file, receiptURL != nil {
+                    Section("Original receipt") {
+                        Button("Preview selected receipt") { previewSelectedReceipt() }.accessibilityIdentifier("expense.receipt.preview")
+                    }
                 }
 
                 // Description
@@ -649,15 +690,20 @@ struct ExpenseFormSheet: View {
                     }
                 }
             }
-            .disabled(captureStarted && !isEditing)
+            .disabled((captureStarted && !isEditing) || keepingCapture || restoringCapture || pendingKeep != nil)
             .navigationTitle(isEditing ? "Edit Expense" : "New Expense")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if pendingKeep != nil {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Retry keeping original capture") { Task { await keepForLater() } }.disabled(keepingCapture)
+                    }
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         isPresented = false
                     }
-                    .disabled(isSaving)
+                    .disabled(isSaving || keepingCapture)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
@@ -665,7 +711,7 @@ struct ExpenseFormSheet: View {
                         Task { await saveExpense() }
                     }
                     .accessibilityIdentifier("expense.save")
-                    .disabled(description.isEmpty || amount.isEmpty || currency.isEmpty || receiptDateMissing || isSaving || extractingReceipt || (receiptSuggestionApplied && !receiptConfirmed))
+                    .disabled(description.isEmpty || amount.isEmpty || currency.isEmpty || receiptDateMissing || isSaving || extractingReceipt || keepingCapture || restoringCapture || pendingKeep != nil || alreadySavedCapture || (receiptSuggestionApplied && !receiptConfirmed))
                 }
             }
             .overlay {
@@ -674,20 +720,27 @@ struct ExpenseFormSheet: View {
                 }
             }
             .task {
+                guard !initialized else { return }
                 if openReceiptPicker { pickingReceipt = true }
                 currency = expense?.currency ?? appState.currentUser?.reportingCurrency ?? "USD"
                 await loadProjects()
-                savedExpenses = (try? await expenseRepository.fetchExpenses()) ?? []
+                do { savedExpenses = try await expenseRepository.fetchExpenses() }
+                catch { if capture != nil { alreadySavedCapture = true; errorMessage = "Could not check saved records. Close and reopen this capture before saving."; return } }
+                if let capture { await restore(capture) }
+                if !Task.isCancelled { initialized = true }
             }
             .quickLookPreview($originalPreviewURL)
-            .onDisappear { receiptTask?.cancel() }
+            .onDisappear { receiptTask?.cancel(); if let file = pendingKeep?.file { try? FileManager.default.removeItem(at: file) } }
+            .interactiveDismissDisabled(isSaving || keepingCapture)
             .onChange(of: originalPreviewURL) { previous, current in if previous != current, let url = previous { try? FileManager.default.removeItem(at: url) } }
             .onChange(of: appState.currentUser?.id) { _, _ in receiptTask?.cancel(); receiptPreview = nil; isPresented = false }
+            .onChange(of: aiConsent.revision) { _, _ in receiptTask?.cancel(); receiptPreview = nil; extractingReceipt = false }
+            .onChange(of: reviewFields) { _, _ in receiptConfirmed = false }
             .fileImporter(isPresented: $pickingReceipt, allowedContentTypes: [.jpeg, .png, .webP, .pdf]) { result in
-                do { receiptTask?.cancel(); receiptPreview = nil; receiptURL = try result.get(); uploadedReceipt = nil; receiptConfirmed = false; if openReceiptPicker { extractReceipt() } } catch { errorMessage = "Could not select the receipt." }
+                do { receiptTask?.cancel(); receiptPreview = nil; receiptURL = try result.get(); captureFileName = nil; captureExtraction = nil; uploadedReceipt = nil; receiptConfirmed = false; if openReceiptPicker && canUseAI { extractReceipt() } } catch { errorMessage = "Could not select the receipt." }
             }
             .sheet(isPresented: $showingScanner) {
-                ReceiptScannerView(onScanComplete: { receiptText = $0 }, onError: { errorMessage = $0 })
+                ReceiptScannerView(onScanComplete: { receiptText = $0; captureMethod = .text }, onError: { errorMessage = $0 })
                 .withAppTheme()
             }
         }
@@ -698,14 +751,24 @@ struct ExpenseFormSheet: View {
         guard let value = Double(amount), value > 0, !normalized(merchant).isEmpty, !receiptDateMissing else { return nil }
         return savedExpenses.first { $0.id != expense?.id && RecordCoding.money($0.amount) == RecordCoding.money(value) && $0.currency == currency && RecordCoding.day($0.expenseDate) == RecordCoding.day(expenseDate) && normalized($0.merchant ?? "") == normalized(merchant) }
     }
+    private var canUseAI: Bool { aiConsent.allows(userID: appState.currentUser?.id, sessionGeneration: AmountlyPlatform.transport.generation) }
+    private var reviewFields: [String] { [description, amount, currency, merchant, category.rawValue, RecordCoding.day(expenseDate), selectedProjectId ?? "", notes] }
     private func extractReceipt() {
-        guard !extractingReceipt, let url = receiptURL else { return }
+        guard canUseAI, !extractingReceipt, let url = receiptURL else { return }
         receiptPreview = nil; errorMessage = nil; extractingReceipt = true; receiptConfirmed = false; receiptSuggestionApplied = false
         receiptTask = Task { @MainActor in
             defer { extractingReceipt = false }
             do { let result = try await ReceiptCaptureService.capture(url: url); try Task.checkCancellation(); receiptPreview = result }
             catch is CancellationError {} catch { if !Task.isCancelled { errorMessage = "Could not read this receipt. Try again or enter the details manually." } }
         }
+    }
+    private func previewSelectedReceipt() {
+        do {
+            guard let receiptURL else { return }
+            let file = try ReceiptStorage.read(url: receiptURL)
+            let ext = file.mime == "image/jpeg" ? "jpg" : receiptURL.pathExtension.lowercased()
+            originalPreviewURL = try PrivateDocument.write(file.data, extension: ext, prefix: "receipt")
+        } catch { errorMessage = "Could not preview this receipt. Try selecting it again." }
     }
     private func applyReceipt(_ result: AIReceiptFile) {
         guard result.document_type == .receipt else { return }
@@ -714,6 +777,7 @@ struct ExpenseFormSheet: View {
         receiptDateMissing = AIValidation.date(result.expense_date) == nil
         if let date = AIValidation.date(result.expense_date) { expenseDate = date }
         receiptPreview = nil; receiptSuggestionApplied = true; receiptConfirmed = false
+        captureExtraction = result; captureExtracted = true
     }
 
     private func applyExpense(_ result: AIExpense) {
@@ -735,6 +799,7 @@ struct ExpenseFormSheet: View {
     }
 
     private func saveExpense() async {
+        guard !keepingCapture, !restoringCapture, pendingKeep == nil, !alreadySavedCapture else { return }
         guard !receiptDateMissing, (!receiptSuggestionApplied || receiptConfirmed), RecordCoding.currencies.contains(currency), let amountValue = Double(amount), amountValue > 0 else {
             errorMessage = "Please enter a valid amount"
             return
@@ -774,6 +839,13 @@ struct ExpenseFormSheet: View {
                 )
             }
 
+            if let activeCapture {
+                // Delete only after the financial save is confirmed. If cleanup
+                // fails, the stable capture ID still prevents a second expense.
+                do { try await CaptureDraftService().discard(activeCapture) }
+                catch { appState.setError("Expense saved. Reopen its kept capture to confirm cleanup; it cannot create a second expense.") }
+            }
+            NotificationCenter.default.post(name: .recordsChanged, object: nil)
             onSave()
             isPresented = false
         } catch {
@@ -782,12 +854,67 @@ struct ExpenseFormSheet: View {
 
         isSaving = false
     }
+    private func restore(_ draft: CaptureDraft) async {
+        restoringCapture = true; defer { restoringCapture = false }
+        if savedExpenses.contains(where: { $0.id.lowercased() == draft.id.uuidString.lowercased() }) {
+            alreadySavedCapture = true
+            errorMessage = "This capture already has a saved expense. Open that expense from Records."
+            return
+        }
+        let owner = appState.currentUser?.id
+        do {
+            let original = try await CaptureDraftService().original(draft)
+            guard !Task.isCancelled, appState.currentUser?.id == owner else { if let original { try? FileManager.default.removeItem(at: original) }; return }
+            let fields = draft.payload.fields
+            description = fields.description; amount = fields.amount; currency = fields.currency
+            category = ExpenseCategory(rawValue: fields.category.rawValue) ?? .other; merchant = fields.merchant
+            receiptDateMissing = fields.expense_date.isEmpty
+            if let date = AIValidation.date(fields.expense_date) { expenseDate = date }
+            selectedProjectId = fields.project_id.isEmpty ? nil : fields.project_id; notes = fields.notes
+            receiptText = draft.payload.text; receiptURL = original; captureFileName = draft.file_name
+            captureMethod = draft.payload.method; captureExtraction = draft.payload.extraction
+            captureExtracted = draft.payload.extracted || draft.payload.extraction != nil
+            receiptSuggestionApplied = captureExtracted; receiptConfirmed = false
+            activeCapture = draft; captureID = draft.id; captureAttempt = RecordAttempt(id: draft.id)
+        } catch { alreadySavedCapture = true; errorMessage = "Could not restore this capture. Close and reopen it to try again." }
+    }
+    private func keepForLater() async {
+        guard !isEditing, !captureStarted, !isSaving, !keepingCapture, !extractingReceipt, !restoringCapture else { return }
+        keepingCapture = true; defer { keepingCapture = false }
+        let owner = appState.currentUser?.id
+        do {
+            if pendingKeep == nil {
+                var fields = CaptureFields()
+                fields.amount = amount; fields.currency = currency; fields.description = description; fields.merchant = merchant
+                fields.category = AICategory(rawValue: category.rawValue) ?? .other
+                fields.expense_date = receiptDateMissing ? "" : RecordCoding.day(expenseDate)
+                fields.project_id = selectedProjectId ?? ""; fields.notes = notes
+                let payload = CapturePayload(method: captureMethod, fields: fields, text: receiptText, extraction: captureExtraction, extracted: captureExtracted)
+                try payload.validate()
+                var original: URL?
+                if let receiptURL {
+                    let file = try ReceiptStorage.read(url: receiptURL)
+                    let ext = ["image/jpeg":"jpg", "image/png":"png", "image/webp":"webp", "application/pdf":"pdf"][file.mime]!
+                    original = try PrivateDocument.write(file.data, extension: ext, prefix: "receipt")
+                }
+                pendingKeep = KeepAttempt(id: activeCapture?.id ?? captureID, revision: activeCapture?.revision ?? 0, payload: payload, file: original, filename: captureFileName ?? receiptURL?.lastPathComponent)
+            }
+            guard let request = pendingKeep else { return }
+            let draft = try await CaptureDraftService().keep(id: request.id, revision: request.revision, payload: request.payload, file: request.file, originalName: request.filename)
+            guard !Task.isCancelled, appState.currentUser?.id == owner else { return }
+            activeCapture = draft; pendingKeep = nil
+            if let file = request.file { try? FileManager.default.removeItem(at: file) }
+            NotificationCenter.default.post(name: .recordsChanged, object: nil)
+            isPresented = false
+        } catch { errorMessage = (error as? CaptureError)?.localizedDescription ?? "Could not confirm this capture. Retry keeping the original request, or close and reopen captures." }
+    }
 }
 
 // MARK: - Expense Detail Sheet
 
 struct ExpenseDetailSheet: View {
     @State private var receiptDocument: ReceiptDocument?
+    @State private var viewingOriginal = false
     @State private var reviewConfirmation = false
     @State private var showingEdit = false
     private struct ReceiptDocument: Identifiable { let id = UUID(); let url: URL }
@@ -853,6 +980,7 @@ struct ExpenseDetailSheet: View {
                         }
 
                         if expense.hasReceipt {
+                            Button("View original receipt") { viewingOriginal = true }.accessibilityIdentifier("expense.original.view")
                             Button("Open Receipt") { Task {
                                 do { let url = try await ReceiptStorage().signedURL(for: expense); receiptDocument = ReceiptDocument(url: url) }
                                 catch { errorMessage = "Could not open the receipt. Check access and try again." }
@@ -974,6 +1102,7 @@ struct ExpenseDetailSheet: View {
             }
         }
         .sheet(item: $receiptDocument, onDismiss: { PrivateDocument.removeAll() }) { document in ShareSheet(activityItems: [document.url]) }
+        .sheet(isPresented: $viewingOriginal) { SavedReceiptReviewSheet(expense: expense) }
         .sheet(isPresented: $showingEdit) { ExpenseFormSheet(isPresented: $showingEdit, expense: expense) { onUpdate(); dismiss() } }
         .confirmationDialog(expense.reviewedAt == nil ? "Mark expense reviewed?" : "Clear expense review?", isPresented: $reviewConfirmation, titleVisibility: .visible) {
             Button("Confirm") { Task { await setReviewed() } }
@@ -1062,6 +1191,7 @@ struct ExpenseViewContent: View {
                 }
 
                 ExpenseListFilters(viewModel: viewModel)
+                NavigationLink("Continue a capture", destination: CaptureDraftsView()).padding(.horizontal)
                 // Expenses List
                 if viewModel.isLoading {
                     ProgressView()

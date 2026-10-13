@@ -13,12 +13,16 @@ struct ReviewInboxView: View {
     @State private var error: String?
     @State private var loading = true
     @State private var busy = false
+    @State private var receipt: Expense?
+    @State private var resumedCapture: CaptureDraft?
+    @State private var discardedCapture: CaptureDraft?
     @State private var history: ReviewRecord?
     @State private var pending: ReviewRecord?
     private struct ReviewRecord: Identifiable { let id: String; let kind: String; let title: String; let version: String?; let action: String }
     private var canReview: Bool { appState.currentUser?.accountType == .business && appState.currentUser?.isAdmin == true }
     var body: some View {
         List {
+            CaptureDraftInbox(onResume: { resumedCapture = $0 }, onDiscard: { discardedCapture = $0 })
             Text(isSolo ? "Review saved amounts, currency, dates, categories and receipts. Reviewed is a personal check; expenses remain captured records." : "Review captured expenses and time. Approvals require a different owner or administrator.").font(.caption)
             if loading { ProgressView("Loading review inbox…") }
             if let error { Text(error).foregroundStyle(.red) }
@@ -36,6 +40,7 @@ struct ReviewInboxView: View {
                         Text(expense.description).font(.headline)
                         Text("\(expense.amountFormatted) · \(expense.status.displayName)").font(.caption)
                         Button("Open saved expense") { selectedExpense = expense }
+                        if expense.hasReceipt { Button("View original receipt") { receipt = expense } }
                         if isSolo && expense.userId == appState.currentUser?.id && [.draft, .rejected].contains(expense.status) {
                             Text(expense.reviewedAt == nil ? "Needs review" : "Reviewed").font(.caption)
                             Button(expense.reviewedAt == nil ? "Mark reviewed" : "Clear review") { soloReview = expense }
@@ -57,6 +62,11 @@ struct ReviewInboxView: View {
             .task { await load() }.refreshable { await load() }
             .sheet(item: $selectedInvoice) { invoice in InvoiceDetailSheet(invoice: invoice, onUpdate: { Task { await load() } }) }
             .sheet(item: $selectedExpense) { expense in ExpenseDetailSheet(expense: expense) { Task { await load() } } }
+            .sheet(item: $receipt) { expense in SavedReceiptReviewSheet(expense: expense) }
+            .sheet(item: $resumedCapture) { draft in
+                ExpenseFormSheet(isPresented: Binding(get: { resumedCapture != nil }, set: { if !$0 { resumedCapture = nil } }), capture: draft, onSave: { Task { await load() } })
+            }
+            .modifier(CaptureDiscardConfirmation(draft: $discardedCapture))
             .confirmationDialog("Confirm expense review", isPresented: Binding(get: { soloReview != nil }, set: { if !$0 { soloReview = nil } }), titleVisibility: .visible) {
                 if let expense = soloReview { Button(expense.reviewedAt == nil ? "Confirm mark reviewed" : "Confirm clear review") { Task { await markReviewed(expense) } } }
             } message: { Text("Check the saved amount, currency, date, category and receipt. This change is recorded in history.") }

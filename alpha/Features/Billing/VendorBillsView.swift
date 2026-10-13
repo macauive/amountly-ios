@@ -2,6 +2,11 @@ import SwiftUI
 
 struct VendorBillsView: View {
     @State private var bills: [VendorBill] = []
+    @State private var filters = RecordFilters()
+    private var visibleBills: [VendorBill] {
+        let ids = Set(filters.apply(bills.map { SearchRecord($0) }).map(\.recordID))
+        return bills.filter { ids.contains($0.id) }
+    }
     @State private var error: String?
     @State private var loading = true
     @State private var showingCreate = false
@@ -12,13 +17,14 @@ struct VendorBillsView: View {
     @State private var saving = false
     var body: some View {
         List {
+            Section("Filter supplier bills") { RecordFilterControls(filters: $filters, statuses: BillStatus.allCases.map(\.rawValue)) }
             if loading { ProgressView("Loading vendor bills…") }
             if let error { Text(error).foregroundStyle(.red) }
             NavigationLink("Vendors", destination: VendorsView())
             NavigationLink("Purchase Orders", destination: PurchaseOrdersView())
             Button("New Vendor Bill") { showingCreate = true }
             if !loading && bills.isEmpty && error == nil { ContentUnavailableView("No vendor bills", systemImage: "creditcard", description: Text("Add a bill to track money owed to a vendor.")) }
-            ForEach(bills) { bill in
+            ForEach(visibleBills) { bill in
                 VStack(alignment: .leading, spacing: 8) {
                     HStack { Text(bill.vendor?.name ?? "Vendor").font(.headline); Spacer(); Text(bill.total, format: .currency(code: bill.currency ?? "USD")) }
                     Text("\(bill.bill_number) · Due \(bill.due_date)").font(.caption)

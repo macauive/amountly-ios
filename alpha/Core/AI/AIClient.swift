@@ -46,7 +46,9 @@ final class AIClient {
         let body = try JSONSerialization.data(withJSONObject: ["task": task.rawValue, "payload": object])
         guard body.count <= 64000 else { throw AIError.input }
         let actor: AISession
-        do { actor = try await identity() } catch { throw AIError.signIn }
+        do { actor = try await identity() }
+        catch let error as AIError { throw error }
+        catch { throw AIError.signIn }
         guard !actor.userID.isEmpty, actor.token.range(of: #"^[A-Za-z0-9._-]{20,8192}$"#, options: .regularExpression) != nil else { throw AIError.signIn }
         try Task.checkCancellation()
         var request = URLRequest(url: Self.endpoint)

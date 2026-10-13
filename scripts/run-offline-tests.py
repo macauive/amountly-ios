@@ -12,7 +12,7 @@ parser.add_argument('--products', required=True)
 parser.add_argument('--device', required=True)
 args = parser.parse_args()
 products = Path(args.products).resolve()
-sources = sorted(products.glob('AmountlyIntegration_*-arm64.xctestrun'))
+sources = sorted(products.glob('AmountlyIntegration_*-arm64*.xctestrun'))
 if not sources:
     raise SystemExit('Build AmountlyIntegration for the arm64 simulator first.')
 config = plistlib.loads(sources[-1].read_bytes())
@@ -35,6 +35,7 @@ command = ['xcodebuild', 'test-without-building', '-xctestrun', str(local),
            '-destination', f'platform=iOS Simulator,id={args.device}', '-parallel-testing-enabled', 'NO']
 for test in [
     'RenderParityTests',
+    'WebRefreshParityTests',
     'AIParityTests/testTimeFormsKeepExactMinutesAndExplicitRange',
     'AIParityTests/testDashboardUsesBoundedAllowlistedSummaryWithoutReceiptLinks',
     'AIParityTests/testReceiptOCRProvidesSourceTextWithoutGuessingAmounts',

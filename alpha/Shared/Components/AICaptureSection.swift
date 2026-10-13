@@ -8,6 +8,7 @@ extension EnvironmentValues {
 // SwiftUI cancels the request when its sheet closes or a new request replaces it.
 struct AICaptureSection<Result: AIResult>: View {
     @EnvironmentObject private var appState: AppState
+    @ObservedObject private var consent = AIConsentStore.shared
     @Environment(\.aiCaptureClient) private var environmentClient
     let title: String
     @Binding var text: String
@@ -18,8 +19,10 @@ struct AICaptureSection<Result: AIResult>: View {
     @State private var submitted = ""
     @State private var result: Result?
     @State private var error: String?
+    private var canUseAI: Bool { consent.allows(userID: appState.currentUser?.id, sessionGeneration: AmountlyPlatform.transport.generation) }
     var body: some View {
         Section(title) {
+            AIConsentControl()
             TextEditor(text: $text).frame(minHeight: 82).accessibilityLabel(title + " text")
                 .disabled(requestID != nil)
             Text("Describe the details or paste text. Review the AI suggestion before applying it.").font(.caption).foregroundStyle(.secondary)
@@ -29,7 +32,7 @@ struct AICaptureSection<Result: AIResult>: View {
             } else {
                 Button("Get suggestion", systemImage: "wand.and.stars") {
                     submitted = text; result = nil; error = nil; requestID = UUID()
-                }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || text.utf16.count > 12000)
+                }.disabled(!canUseAI || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || text.utf16.count > 12000)
             }
             if let error { Text(error).foregroundStyle(.red).accessibilityLabel(error) }
             if let result {
@@ -39,8 +42,9 @@ struct AICaptureSection<Result: AIResult>: View {
         }
         .onChange(of: appState.currentUser?.id) { _, _ in requestID = nil; result = nil; error = nil; text = "" }
         .onChange(of: text) { _, _ in result = nil; error = nil }
+        .onChange(of: consent.revision) { _, _ in requestID = nil; result = nil; error = nil }
         .task(id: requestID) {
-            guard let id = requestID else { return }
+            guard let id = requestID, canUseAI else { return }
             defer { if requestID == id { requestID = nil } }
             do {
                 let value: Result = try await (environmentClient ?? client).run(task, payload: submitted)

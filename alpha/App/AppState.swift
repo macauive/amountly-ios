@@ -21,8 +21,50 @@ class AppState: ObservableObject {
     @Published var organization: Organization?
     @Published var isLoading = false
     @Published var error: String?
+    @Published var privacyShield = false
+    @Published var sessionCheckError: String?
+    private var foregroundCheck = UUID()
 
-    private let authService = AuthService.shared
+    func suspendPrivateUI() {
+        foregroundCheck = UUID()
+        privacyShield = true
+        sessionCheckError = nil
+        cancelRestoreTask()
+        invalidatePending()
+    }
+
+    func resumePrivateUI() async {
+        guard privacyShield else { return }
+        let check = UUID(); foregroundCheck = check
+        sessionCheckError = nil
+        do {
+            let restored = try await authService.restoreAuthenticatedState()
+            guard check == foregroundCheck, !Task.isCancelled else { return }
+            if let restored {
+                let changed = currentUser?.id != restored.user.id || currentUser?.organizationId != restored.user.organizationId
+                    || currentUser?.role != restored.user.role || currentUser?.accountType != restored.user.accountType
+                if changed { logout(); AIConsentStore.shared.revoke() }
+                currentUser = restored.user; organization = restored.organization
+                isAuthenticated = true; isLoading = false
+            } else { logout() }
+            privacyShield = false
+        } catch let error as PlatformError where error == .signIn || error == .denied {
+            guard check == foregroundCheck else { return }
+            logout()
+        } catch AuthError.profileSetupRequired {
+            guard check == foregroundCheck else { return }
+            enterSetup(organization: false); privacyShield = false
+        } catch AuthError.organizationSetupRequired {
+            guard check == foregroundCheck else { return }
+            enterSetup(organization: true); privacyShield = false
+        } catch {
+            guard check == foregroundCheck else { return }
+            sessionCheckError = "Could not verify your session. Retry to reopen your records."
+        }
+    }
+
+    private let authService: AuthService
+    private let invalidatePending: @MainActor () -> Void
     private var authStateTask: Task<Void, Never>?
     private var restoreTask: Task<Void, Never>?
     private var restoreGeneration = UUID()
@@ -33,14 +75,16 @@ class AppState: ObservableObject {
 
     // MARK: - Initialization
 
-    init() {
+    init(authService: AuthService? = nil, invalidatePending: (@MainActor () -> Void)? = nil) {
+        self.authService = authService ?? .shared
+        self.invalidatePending = invalidatePending ?? { AmountlyPlatform.transport.invalidatePending() }
 #if DEBUG
         // Hosted XCTest owns its sessions; background UI restoration would race it.
         if ProcessInfo.processInfo.environment["AMOUNTLY_XCTEST"] == "1" { return }
 #endif
         PrivateDocument.removeAll()
         // Observe auth state changes
-        authStateTask = authService.observeAuthStateChanges { [weak self] event, session in
+        authStateTask = self.authService.observeAuthStateChanges { [weak self] event, session in
             Task { @MainActor in
                 switch event {
                 case .signedIn, .initialSession:
@@ -85,6 +129,7 @@ class AppState: ObservableObject {
     }
 
     func logout() {
+        foregroundCheck = UUID(); privacyShield = false; sessionCheckError = nil
         needsSoloSetup = false; needsOrganizationSetup = false; setupName = ""; setupEmail = ""
         PrivateDocument.removeAll()
         cancelRestoreTask()
@@ -183,6 +228,7 @@ class AppState: ObservableObject {
     }
 
     private func onSignedOut() {
+        foregroundCheck = UUID(); privacyShield = false; sessionCheckError = nil
         needsSoloSetup = false; needsOrganizationSetup = false; setupName = ""; setupEmail = ""
         PrivateDocument.removeAll()
         self.currentUser = nil

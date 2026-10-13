@@ -1,5 +1,63 @@
 # Web / iOS alignment
 
+## October 13, 2026 parity refresh
+
+Compared the latest fetched web `origin/main` at `d4ced02` (feature release
+`46d18cb`) with native `241996b` plus the existing local App Store preparation.
+The existing `macdigital.amountly` identity, privacy/legal links, deletion request,
+AI consent/withdrawal, camera description, privacy manifest and release fixtures
+were preserved. No web source or backend migration was changed.
+
+| Current web behavior | Native implementation |
+| --- | --- |
+| Keep unfinished captures | New private capture API client uses `/api/capture-drafts`, typed bounded metadata and one validated original. Keep for later, resume and explicit discard are available from Expenses and Review Inbox. Captures do not enter financial totals. |
+| Cross-client resumption | Metadata/original reads carry the same revision. Identical retries preserve the original payload and bytes; stale revisions fail safely. Resuming resets acknowledgment and uses the capture UUID for the financial record. An existing saved UUID blocks a second creation; capture cleanup follows confirmed financial success. |
+| Find financial records | Find records is available across the tabs. Native search combines authorized expenses, invoices, personal bills and supplier bills. It supports names/numbers/amounts, type, calendar-date range, status and receipt filters, Unicode normalization, all-term matching and exact-title ranking. No AI request or currency conversion occurs. A failed source produces no partial results. |
+| Exact records and return context | Results open the exact current record, with existing expense/invoice actions and permission-scoped bill actions. Dismissing inspection/correction refreshes records and retains filters. Invoice and bill lists also have text/date/status filters; totals continue to use all loaded records. |
+| Review originals | Saved originals can be viewed from expense details and Review Inbox. Images support pinch zoom; PDFs have bounded native raster rendering, page controls and a five-page limit. Original sharing remains explicit. Selected-file Quick Look does not reinitialize the editor or reset fields. |
+| Receipt-text review | Applying receipt text requires acknowledgment before saving, matching file extraction. Resumed proposals also require fresh acknowledgment. Changing the reviewed fields resets it. File, text and manual entry have explicit capture modes. |
+| UTC financial dates | Offset timestamps are normalized to the UTC financial day before constructing local calendar dates for editing, filtering, duplicates and reports. Actual event timestamps and optimistic versions remain unchanged. |
+| Foreground session validation | Returning from background revalidates identity/profile while private UI is covered. Revoked sessions clear the account; changed account/workspace/role resets private screens and AI consent. Failed checks keep the shield with retry/sign-out actions. Same-scope checks preserve the editor. Late pre-suspension responses are cancelled without discarding a valid cookie. |
+
+Verification for this refresh:
+
+- 41 Swift package tests passed, including UTC/year-boundary regressions,
+  incomplete capture/schema validation, record-search behavior and late-response
+  cancellation, alongside existing release privacy/AI/rules coverage.
+- 20 offline simulator tests cover capture API authentication, multipart fields,
+  original bytes, revisioned deletes, conflict/capacity errors, malformed replies,
+  foreground restoration/revocation/account changes and bounded PDF paging,
+  alongside the existing Render and native AI parity cases.
+- A live dedicated synthetic QA test passed using two independent native sessions:
+  private draft save/resume, byte-identical original retrieval, recovery of an
+  identical save, stale-revision rejection and draft cleanup. It makes no AI call
+  and creates no financial record.
+- Native XCUITest passed resumption from Review Inbox, required fresh review,
+  Quick Look, save, exact-ID Records search and saved original presentation.
+  The cleanup oracle checks one expense for the capture UUID, exact amount,
+  currency/date/status, no automatic review marker, removal of the kept draft,
+  and byte-identical uploaded/downloaded original.
+- Debug integration/UI builds and unsigned Release device build passed.
+  QA credentials remain outside Git; generated private run configurations and
+  simulator preparation files are removed, and the prepared session signs out.
+  Synthetic QA expense originals remain in the dedicated QA account for repeatable
+  inspection; existing account financial records and roles were preserved.
+- Before commit, all three release-readiness UI cases passed again on both
+  iPhone 17 Pro and iPad Pro 13-inch (M5), iOS 26.5 (six executions).
+- A second hosted native UI case passed keeping an edited capture, restoring
+  the new amount with acknowledgment still required, cancelling discard and
+  confirming discard. Its cleanup oracle confirms removal and no expense for
+  the capture UUID. The discard confirmation now uses a native alert with an
+  explicit Cancel action, including when a popover would omit a cancel button.
+- A fresh unsigned Release archive passed with the final confirmation fix.
+  Its identity, camera disclosure and privacy manifest were checked; Debug
+  fixtures and test plug-ins are absent. Archive:
+  `/private/tmp/Amountly-oct13-tested.xcarchive`.
+
+Physical-camera behavior and App Store signing/submission remain the separate
+release gates described in `APP_STORE_RELEASE.md`. This refresh does not claim
+new physical-device or exhaustive iPad parity UI verification.
+
 ## October 7, 2026 refresh
 
 Compared the clean web checkout at `1f85aa2` with native baseline `0d23cc6`.
@@ -342,6 +400,22 @@ synthetic local accounts; no hosted financial records were changed.
   other currencies are never silently converted.
 - Advanced accounting, payroll, inventory and team modules remain behind the
   existing product-scope gate.
+
+## App Store preparation on October 7, 2026
+
+The native app now uses `macdigital.amountly`, exposes working privacy/terms/
+support links and authenticated account-deletion requests, and states Mac
+Digital's confirmed 30-day deletion window. Optional AI requires explicit
+session permission for text, receipt files, reminders, and dashboard insights;
+withdrawal blocks future requests and rejects stale responses. The camera usage
+description and app privacy manifest are included, and unfinished settings
+destinations are hidden.
+
+The current preparation passed 35 Swift package tests, 13 offline simulator
+integration tests, and the three release-readiness UI cases on both iPhone and
+iPad. These checks use synthetic data and do not prove production deletion
+fulfillment or physical-camera behavior. Publication prerequisites and the
+draft listing are tracked in [APP_STORE_RELEASE.md](APP_STORE_RELEASE.md).
 
 ## Keeping future changes consistent
 

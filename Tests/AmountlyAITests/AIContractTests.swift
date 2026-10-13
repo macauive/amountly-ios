@@ -127,6 +127,24 @@ final class AIContractTests: XCTestCase {
         do { let _: AIExpense = try await api.run(.expense, payload: "Paper $10"); XCTFail() }
         catch { XCTAssertEqual(error as? AIError, .signIn) }
     }
+    func testConsentDenialAndRevisionChangeCannotReturnSuggestion() async throws {
+        var calls = 0
+        MockAIProtocol.handler = { _ in calls += 1; return (500, Data()) }
+        do { let _: AILine = try await client(identity: { throw AIError.consent }).run(.line, payload: "Design"); XCTFail() }
+        catch { XCTAssertEqual(error as? AIError, .consent) }
+        XCTAssertEqual(calls, 0)
+
+        let response = try envelope(expense)
+        var identities = 0
+        let api = AIClient(transport: { request in
+            (response, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!)
+        }) {
+            identities += 1
+            return AISession(userID: "same-account", token: "synthetic_consent_revision_0000000000_" + String(identities))
+        }
+        do { let _: AIExpense = try await api.run(.expense, payload: "Paper $10"); XCTFail("A result from a prior consent revision escaped") }
+        catch { XCTAssertEqual(error as? AIError, .signIn) }
+    }
     func testOversizedResponseAndMalformedJSONAreRejected() async throws {
         for data in [Data(repeating: 32, count: 256001), Data("not JSON".utf8)] {
             MockAIProtocol.handler = { _ in (200, data) }

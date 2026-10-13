@@ -42,10 +42,15 @@ final class AmountlyDataClient {
 
 @MainActor
 enum AmountlyPlatform {
-    static let transport = AmountlyTransport(load: { try KeychainHelper.shared.get("render-session-v1") }, save: { data in
-        if let data { try KeychainHelper.shared.save(data, for: "render-session-v1") }
-        else { try KeychainHelper.shared.delete("render-session-v1") }
-    })
+    static let transport: AmountlyTransport = {
+#if DEBUG
+        if ReleaseReadinessPreview.enabled { return ReleaseReadinessPreview.transport() }
+#endif
+        return AmountlyTransport(load: { try KeychainHelper.shared.get("render-session-v1") }, save: { data in
+            if let data { try KeychainHelper.shared.save(data, for: "render-session-v1") }
+            else { try KeychainHelper.shared.delete("render-session-v1") }
+        })
+    }()
 }
 
 @MainActor

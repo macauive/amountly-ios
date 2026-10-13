@@ -7,7 +7,7 @@ nonisolated enum AITask: String, Sendable {
 }
 
 nonisolated enum AIError: Error, LocalizedError, Equatable {
-    case input, response, signIn, denied, limit, unavailable, network
+    case input, response, signIn, denied, limit, unavailable, network, consent
     var errorDescription: String? {
         switch self {
         case .input: return "Check the input. Use up to 12,000 characters and valid amounts and dates."
@@ -17,6 +17,7 @@ nonisolated enum AIError: Error, LocalizedError, Equatable {
         case .limit: return "AI usage limit reached. Please try again later."
         case .unavailable: return "AI is temporarily unavailable. Your form has not changed."
         case .network: return "Could not reach AI. Check your connection and try again."
+        case .consent: return "Allow AI data sharing before using this optional feature."
         }
     }
     static func message(_ error: Error) -> String { (error as? AIError ?? .network).localizedDescription }
@@ -65,8 +66,8 @@ nonisolated enum AIValidation {
     }
 }
 
-nonisolated enum AIConfidence: String, Decodable, Sendable { case high, medium, low }
-nonisolated enum AICategory: String, Decodable, Sendable {
+nonisolated enum AIConfidence: String, Codable, Sendable { case high, medium, low }
+nonisolated enum AICategory: String, Codable, Sendable {
     case office = "OFFICE_SUPPLIES", travel = "TRAVEL", meals = "MEALS", software = "SOFTWARE"
     case hardware = "HARDWARE", marketing = "MARKETING", utilities = "UTILITIES", other = "OTHER"
 }

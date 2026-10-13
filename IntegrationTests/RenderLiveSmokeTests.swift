@@ -57,13 +57,15 @@ final class RenderLiveSmokeTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         try XCTSkipUnless(env["AMOUNTLY_AI_LIVE_TESTING"] == "1", "Requires explicit QA opt-in.")
         let email = try XCTUnwrap(env["AMOUNTLY_AI_QA_EMAIL"]), password = try XCTUnwrap(env["AMOUNTLY_AI_QA_PASSWORD"])
-        let transport = AmountlyTransport()
+        let consent = AIConsentStore()
+        let transport = AmountlyTransport(aiConsent: consent)
         // Use the same private transport for every API in this test.
         let auth = AmountlyAuthClient(transport: transport)
         var stage = "sign-in"
         var actor: alpha.User?
         do {
             let session = try await auth.signIn(email: email, password: password)
+            consent.allow(userID: session.user.id.uuidString, sessionGeneration: transport.generation)
             for table in ["expenses", "invoices", "users"] {
                 stage = "protected " + table + " read"
                 let owner = table == "users" ? "&id=eq.\(session.user.id.uuidString.lowercased())" : ""

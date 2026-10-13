@@ -19,6 +19,7 @@ struct MainTabView: View {
     @State private var showingCreateProject = false
     @State private var showingAddExpense = false
     @State private var showingTaxPrep = false
+    @State private var showingRecords = false
 
     init() {
         // Configure tab bar appearance
@@ -117,6 +118,15 @@ struct MainTabView: View {
                     .padding(.bottom, 70)
                 }
             }
+        }
+        .overlay(alignment: .bottomLeading) {
+            Button("Find records", systemImage: "magnifyingglass") { showingRecords = true }
+                .buttonStyle(.borderedProminent).tint(.alphaPrimary)
+                .accessibilityIdentifier("records.open")
+                .padding(.leading, 20).padding(.bottom, 70)
+        }
+        .sheet(isPresented: $showingRecords) {
+            NavigationStack { RecordSearchView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showingRecords = false } } } }
         }
         .sheet(isPresented: $showingQuickActions) {
             QuickActionsSheet(isPresented: $showingQuickActions, actions: quickActions)

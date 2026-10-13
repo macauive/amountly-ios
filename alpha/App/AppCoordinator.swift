@@ -21,7 +21,7 @@ struct AppCoordinator: View {
                 OnboardingView(userName: appState.setupName)
             } else if appState.isAuthenticated {
                 // Main app (will create this in Phase 3)
-                MainTabView()
+                MainTabView().id("\(appState.currentUser?.id ?? ""):\(appState.currentUser?.organizationId ?? ""):\(appState.currentUser?.accountType.rawValue ?? ""):\(appState.currentUser?.role.rawValue ?? "")")
             } else {
                 // Login screen (will create this in Phase 3)
                 LoginView()

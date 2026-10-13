@@ -175,7 +175,8 @@ struct Bill: Identifiable, Codable {
             return nil
         }
 
-        guard let date = RecordCoding.parseDate(value) else { throw RecordError.invalid }
+        let text = key == .dueDate ? RecordCoding.calendarDay(value) : value
+        guard let date = RecordCoding.parseDate(text) else { throw RecordError.invalid }
         return date
     }
 }

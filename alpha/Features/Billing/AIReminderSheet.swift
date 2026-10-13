@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AIReminderSheet: View {
     @EnvironmentObject private var appState: AppState
+    @ObservedObject private var consent = AIConsentStore.shared
     let invoice: Invoice
     @Environment(\.dismiss) private var dismiss
     @State private var requestID: UUID?
@@ -11,15 +12,17 @@ struct AIReminderSheet: View {
     @State private var tone = ""
     @State private var error: String?
     @State private var generated = false
+    private var canUseAI: Bool { consent.allows(userID: appState.currentUser?.id, sessionGeneration: AmountlyPlatform.transport.generation) }
     var body: some View {
         NavigationStack {
             Form {
                 Section {
+                    AIConsentControl()
                     Text(invoice.invoiceNumber)
                     Text("Draft a reminder to review and share. Nothing is sent automatically.").font(.caption)
                     if requestID != nil { ProgressView("Drafting reminder…") }
                     else {
-                        Button(generated ? "Generate another draft" : "Draft reminder", systemImage: "wand.and.stars") { error = nil; requestID = UUID() }
+                        Button(generated ? "Generate another draft" : "Draft reminder", systemImage: "wand.and.stars") { error = nil; requestID = UUID() }.disabled(!canUseAI)
                     }
                     if let error { Text(error).foregroundStyle(.red) }
                 }
@@ -37,8 +40,9 @@ struct AIReminderSheet: View {
             }.navigationTitle("Payment Reminder")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
                 .onChange(of: appState.currentUser?.id) { _, _ in requestID = nil; subject = ""; message = ""; generated = false; dismiss() }
+                .onChange(of: consent.revision) { _, _ in requestID = nil; subject = ""; message = ""; generated = false; error = nil }
                 .task(id: requestID) {
-                    guard let id = requestID else { return }
+                    guard let id = requestID, canUseAI else { return }
                     defer { if requestID == id { requestID = nil } }
                     do {
                         guard [.sent, .overdue].contains(invoice.status), invoice.balanceDue > 0 else { throw AIError.input }

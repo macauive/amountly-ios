@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct DashboardAI: View {
+    @EnvironmentObject private var appState: AppState
+    @ObservedObject private var consent = AIConsentStore.shared
     let input: AIDashboardInput
     let currency: String
     let navigate: (FinancialSearchDestination) -> Void
@@ -8,6 +10,7 @@ struct DashboardAI: View {
     @State private var error: String?
     @State private var loading = false
     @State private var retry = 0
+    private var canUseAI: Bool { consent.allows(userID: appState.currentUser?.id, sessionGeneration: AmountlyPlatform.transport.generation) }
     private var requestKey: Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return (try? encoder.encode(input)) ?? Data()
@@ -15,6 +18,7 @@ struct DashboardAI: View {
     var body: some View {
         GroupBox("AI insights") {
             VStack(alignment: .leading, spacing: 12) {
+                AIConsentControl()
                 Text("Suggestions from a bounded sample of loaded \(currency) records. Use the recorded totals above for accounting.").font(.caption).foregroundStyle(.secondary)
                 if loading { ProgressView("Reviewing workspace…") }
                 if let result {
@@ -29,8 +33,10 @@ struct DashboardAI: View {
                 if let error { Text(error).font(.caption); Button("Retry AI insights") { retry += 1 } }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
         }
-        .task(id: requestKey.base64EncodedString() + String(retry)) {
-            result = nil; error = nil; loading = true
+        .task(id: requestKey.base64EncodedString() + String(retry) + consent.revision.uuidString + (appState.currentUser?.id ?? "")) {
+            result = nil; error = nil; loading = false
+            guard canUseAI else { return }
+            loading = true
             do {
                 // No paid request on each keystroke or intermediate data load.
                 try await Task.sleep(for: .milliseconds(750))

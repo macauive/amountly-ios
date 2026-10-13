@@ -17,6 +17,7 @@ class BillingViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var selectedFilter: InvoiceFilter = .all
+    @Published var recordFilters = RecordFilters()
 
     // Summary metrics
     @Published var outstandingCount: Int = 0
@@ -27,15 +28,17 @@ class BillingViewModel: ObservableObject {
     private let invoiceRepository = InvoiceRepository()
 
     var filteredInvoices: [Invoice] {
+        let ids = Set(recordFilters.apply(invoices.map { SearchRecord($0) }).map(\.recordID))
+        let visible = invoices.filter { ids.contains($0.id) }
         switch selectedFilter {
         case .outstanding:
-            return invoices.filter { $0.status == .sent || $0.status == .overdue }
+            return visible.filter { $0.status == .sent || $0.status == .overdue }
         case .all:
-            return invoices
+            return visible
         case .drafts:
-            return invoices.filter { $0.status == .draft }
+            return visible.filter { $0.status == .draft }
         case .paid:
-            return invoices.filter { $0.status == .paid }
+            return visible.filter { $0.status == .paid }
         }
     }
 
@@ -215,6 +218,8 @@ struct BillingView: View {
                 }
                 .padding(.horizontal)
 
+                RecordListFilterGroup(filters: $viewModel.recordFilters, statuses: ["DRAFT", "SENT", "PAID", "OVERDUE", "CANCELLED"])
+                    .onChange(of: viewModel.recordFilters.status) { _, status in if status != "all" { viewModel.selectedFilter = .all } }
                 // Filter Pills
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -225,6 +230,7 @@ struct BillingView: View {
                                 isSelected: viewModel.selectedFilter == filter
                             ) {
                                 viewModel.selectedFilter = filter
+                                viewModel.recordFilters.status = "all"
                             }
                         }
                     }
@@ -300,6 +306,7 @@ class BillsViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var selectedFilter: BillListFilter = .open
+    @Published var recordFilters = RecordFilters()
 
     @Published var unpaidTotal: Double = 0
     @Published var dueThisWeekCount = 0
@@ -308,15 +315,17 @@ class BillsViewModel: ObservableObject {
     private let billRepository = BillRepository()
 
     var filteredBills: [Bill] {
+        let ids = Set(recordFilters.apply(bills.map { SearchRecord($0) }).map(\.recordID))
+        let visible = bills.filter { ids.contains($0.id) }
         switch selectedFilter {
         case .open:
-            return bills.filter { !$0.isPaid && $0.status != .cancelled }
+            return visible.filter { !$0.isPaid && $0.status != .cancelled }
         case .all:
-            return bills
+            return visible
         case .paid:
-            return bills.filter { $0.isPaid }
+            return visible.filter { $0.isPaid }
         case .overdue:
-            return bills.filter { $0.isOverdue }
+            return visible.filter { $0.isOverdue }
         }
     }
 
@@ -410,6 +419,8 @@ struct BillsView: View {
                 }
                 .padding(.horizontal)
 
+                RecordListFilterGroup(filters: $viewModel.recordFilters, statuses: BillStatus.allCases.map(\.rawValue))
+                    .onChange(of: viewModel.recordFilters.status) { _, status in if status != "all" { viewModel.selectedFilter = .all } }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(BillListFilter.allCases) { filter in
@@ -419,6 +430,7 @@ struct BillsView: View {
                                 isSelected: viewModel.selectedFilter == filter
                             ) {
                                 viewModel.selectedFilter = filter
+                                viewModel.recordFilters.status = "all"
                             }
                         }
                     }

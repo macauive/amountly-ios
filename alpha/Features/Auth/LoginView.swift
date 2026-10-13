@@ -186,6 +186,7 @@ struct LoginView: View {
                     .padding(.horizontal, 24)
 
                     // Sign Up Link
+                    AmountlyLegalLinks()
                     HStack(spacing: 4) {
                         Text("Don't have an account?")
                             .font(.alphaBodySmall)

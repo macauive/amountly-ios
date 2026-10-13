@@ -1,7 +1,7 @@
 import Foundation
 
-nonisolated struct AIReceiptFile: Decodable, Sendable {
-    enum DocumentType: String, Decodable, Sendable { case receipt, invoice, statement, other }
+nonisolated struct AIReceiptFile: Codable, Sendable {
+    enum DocumentType: String, Codable, Sendable { case receipt, invoice, statement, other }
     static let fields: Set<String> = ["document_type", "amount", "currency", "merchant", "description", "expense_date", "category", "confidence", "reason", "summary"]
     let document_type: DocumentType
     let amount: String, currency: String, merchant: String, description: String, expense_date: String

@@ -207,6 +207,7 @@ struct SignUpView: View {
                     }
                     .padding(.horizontal, 24)
 
+                    AmountlyLegalLinks()
                     HStack(spacing: 4) {
                         Text("Already have an account?")
                             .font(.alphaBodySmall)

@@ -79,10 +79,6 @@ struct SettingsView: View {
                 // Preferences Section
                 Section("Preferences") {
                     NavigationLink("Workspace Preferences", destination: WorkspacePreferencesView())
-                    NavigationLink(destination: NotificationPreferencesView(appState: appState)) {
-                        Label("Notifications", systemImage: "bell")
-                    }
-
                     NavigationLink(destination: DisplaySettingsView()) {
                         Label("Display", systemImage: "paintbrush")
                     }
@@ -109,28 +105,6 @@ struct SettingsView: View {
                             Label("Tax Dashboard", systemImage: "doc.plaintext.fill")
                         }
 
-                        NavigationLink(destination: Text("Tax Estimates")) {
-                            Label("Tax Estimates", systemImage: "calculator")
-                        }
-                        .requiresCapability(.generateTaxEstimates)
-
-                        NavigationLink(destination: Text("Tax Documents")) {
-                            Label("Tax Documents", systemImage: "folder.fill")
-                        }
-                        .requiresCapability(.exportTaxDocuments)
-                    }
-                }
-
-                // Integrations Section - Advanced users
-                if appState.hasCapability(.manageIntegrations) {
-                    Section("Integrations") {
-                        NavigationLink(destination: Text("Connected Accounts")) {
-                            Label("Connected Accounts", systemImage: "link")
-                        }
-
-                        NavigationLink(destination: Text("API Settings")) {
-                            Label("API Settings", systemImage: "chevron.left.forwardslash.chevron.right")
-                        }
                     }
                 }
 
@@ -141,24 +115,24 @@ struct SettingsView: View {
                     }
                     .requiresCapability(.exportAllData)
 
-                    NavigationLink(destination: Text("Offline Data")) {
-                        Label("Offline Data", systemImage: "arrow.down.circle")
-                    }
                 }
 
                 // Support Section
                 Section("Support") {
-                    NavigationLink(destination: Text("Help Center")) {
-                        Label("Help Center", systemImage: "questionmark.circle")
-                    }
+                    Link("Help and Support", destination: AmountlyLinks.support)
+                    Link("Contact Mac Digital", destination: AmountlyLinks.supportEmail)
+                    NavigationLink("About Amountly", destination: AboutAmountlyView())
+                }
 
-                    NavigationLink(destination: Text("Send Feedback")) {
-                        Label("Send Feedback", systemImage: "envelope")
+                Section("Privacy and Account") {
+                    Link("Privacy Policy", destination: AmountlyLinks.privacy)
+                    Link("Terms of Use", destination: AmountlyLinks.terms)
+                    NavigationLink("AI Privacy") {
+                        Form { Section("Optional AI data sharing") { AIConsentControl() } }
+                            .navigationTitle("AI Privacy")
                     }
-
-                    NavigationLink(destination: Text("About")) {
-                        Label("About", systemImage: "info.circle")
-                    }
+                    NavigationLink("Delete Account", destination: AccountDeletionView())
+                        .accessibilityIdentifier("settings.deleteAccount")
                 }
 
                 // Sign Out Section
@@ -191,6 +165,25 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             }
         }
+    }
+}
+
+private struct AboutAmountlyView: View {
+    private var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0" }
+    private var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1" }
+    var body: some View {
+        Form {
+            Section("Amountly") {
+                Text("Published by Mac Digital")
+                Text("Version \(version) (\(build))")
+                Text("Keep client invoices, expenses, receipts, and bookkeeping records together. Check your records and AI suggestions before relying on them.")
+            }
+            Section("Support and Privacy") {
+                Link("Help and Support", destination: AmountlyLinks.support)
+                Link("Privacy Policy", destination: AmountlyLinks.privacy)
+                Link("Terms of Use", destination: AmountlyLinks.terms)
+            }
+        }.navigationTitle("About Amountly")
     }
 }
 
